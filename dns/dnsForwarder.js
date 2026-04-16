@@ -9,43 +9,52 @@ const resolveA = dns2.UDPClient({ dns: '1.1.1.1', port: 53 });
  * @param {string} localIp Dirección IP local que se devolverá para dominios interceptados.
  */
 function startDns(localIp) {
-  const server = dns2.createServer({ udp: true });
+  const server = dns2.createServer({
+    udp: true,
+    // Usamos 'handle' como dicta la documentación oficial
+    handle: async (request, send, rinfo) => {
+      // 1. Creamos un objeto de respuesta legítimo basado en la petición
+      const response = Packet.createResponseFromRequest(request);
+      
+      const question = request.questions[0];
+      const domain = question && question.name ? question.name.toLowerCase() : '';
 
-  server.on('request', async (request, response) => {
-    const question = request.questions[0];
-    const domain = question && question.name ? question.name.toLowerCase() : '';
+      if (!domain) {
+        return send(response);
+      }
 
-    if (!domain) {
-      return;
-    }
+      const isIntercepted = domain.includes('cubecraft.net') || domain.includes('hivebedrock.network');
 
-    const isIntercepted = domain.includes('cubecraft.net') || domain.includes('hivebedrock.network');
+      if (isIntercepted) {
+        console.log(`[DNS] [Interceptado] ${domain} -> ${localIp}`);
+        // 2. Ahora sí, answers existe y podemos hacer push
+        response.answers.push({
+          name: domain,
+          type: Packet.TYPE.A,
+          class: Packet.CLASS.IN,
+          ttl: 60,
+          address: localIp,
+        });
+        
+        // 3. Enviamos la respuesta usando la función callback
+        send(response);
+      } else {
+        console.log(`[DNS] [Reenviado] ${domain} -> 1.1.1.1`);
 
-    if (isIntercepted) {
-      console.log(`[DNS] [Interceptado] ${domain} -> ${localIp}`);
-      response.answers.push({
-        name: domain,
-        type: Packet.TYPE.A,
-        class: Packet.CLASS.IN,
-        ttl: 60,
-        address: localIp,
-      });
-    } else {
-      console.log(`[DNS] [Reenviado] ${domain} -> 1.1.1.1`);
-
-      try {
-        const upstream = await resolveA(domain);
-        response.answers = upstream.answers || [];
-        response.authorities = upstream.authorities || [];
-        response.additionals = upstream.additionals || [];
-        response.header.rcode = upstream.header.rcode;
-      } catch (error) {
-        console.error(`[DNS] Error reenviando ${domain}:`, error.message || error);
-        response.header.rcode = Packet.RCODE.SERVFAIL;
+        try {
+          const upstream = await resolveA(domain);
+          response.answers = upstream.answers || [];
+          response.authorities = upstream.authorities || [];
+          response.additionals = upstream.additionals || [];
+          response.header.rcode = upstream.header.rcode;
+          send(response);
+        } catch (error) {
+          console.error(`[DNS] Error reenviando ${domain}:`, error.message || error);
+          response.header.rcode = Packet.RCODE.SERVFAIL;
+          send(response);
+        }
       }
     }
-
-    return response;
   });
 
   server.on('listening', () => {
@@ -55,8 +64,14 @@ function startDns(localIp) {
   server.on('error', (error) => {
     console.error('[DNS] Error en el servidor DNS:', error);
   });
-
-  server.listen(53);
+  
+  server.listen({
+    udp: {
+      port: 53,
+      address: '0.0.0.0',
+      type: 'udp4'
+    }
+  });
 }
 
 module.exports = {

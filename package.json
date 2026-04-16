@@ -11,6 +11,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "bedrock-protocol": "^3.55.0",
     "better-sqlite3": "^12.9.0",
     "dns2": "^2.1.0",
     "express": "^5.2.1"
