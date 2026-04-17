@@ -147,26 +147,34 @@ function startProxy(host, port) {
             console.error('[PROXY] Error enviando paquetes adicionales:', e.message);
           }
 
-          console.log('[PROXY] Enviando formulario de selección...');
-          
-          setTimeout(() => {
-            const servers = getAllServers();
-            const buttons = servers.map((server) => ({ text: server.name }));
-            const formId = Math.floor(Math.random() * 1e6);
-
-            const formPayload = {
-              type: 'form',
-              title: 'BedrockGateway',
-              content: 'Selecciona el servidor al que deseas conectarte:',
-              buttons,
-            };
-
-            client.write('modal_form_request', {
-              form_id: formId,
-              data: JSON.stringify(formPayload),
-            });
-          }, 500); // Pequeño delay para asegurar que el cliente procesó el spawn
+          console.log('[PROXY] Paquetes de inicialización enviados. Esperando respuesta del cliente...');
         }
+      });
+
+      // El cliente pide el radio de chunks que puede ver
+      client.on('request_chunk_radius', (packet) => {
+        client.write('chunk_radius_update', { chunk_radius: packet.chunk_radius });
+      });
+
+      // El cliente confirma que ya se inicializó su personaje en el mundo
+      client.on('set_local_player_as_initialized', (packet) => {
+        console.log('[PROXY] Cliente Spawned! Enviando formulario de selección...');
+        
+        const servers = getAllServers();
+        const buttons = servers.map((server) => ({ text: server.name }));
+        const formId = Math.floor(Math.random() * 1e6);
+
+        const formPayload = {
+          type: 'form',
+          title: 'BedrockGateway',
+          content: 'Selecciona el servidor al que deseas conectarte:',
+          buttons,
+        };
+
+        client.write('modal_form_request', {
+          form_id: formId,
+          data: JSON.stringify(formPayload),
+        });
       });
 
       client.on('modal_form_response', (packet) => {
