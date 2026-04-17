@@ -1,7 +1,7 @@
 const dns2 = require('dns2');
 
 const { Packet } = dns2;
-const resolveA = dns2.UDPClient({ dns: '1.1.1.1', port: 53 });
+const resolveA = dns2.UDPClient({ dns: '8.8.8.8', port: 53 });
 
 /**
  * Inicia el servidor DNS local que intercepta dominios de Bedrock y reenvía el resto.
@@ -39,8 +39,6 @@ function startDns(localIp) {
         // 3. Enviamos la respuesta usando la función callback
         send(response);
       } else {
-        console.log(`[DNS] [Reenviado] ${domain} -> 1.1.1.1`);
-
         try {
           const upstream = await resolveA(domain);
           response.answers = upstream.answers || [];
@@ -68,7 +66,7 @@ function startDns(localIp) {
   server.listen({
     udp: {
       port: 53,
-      address: '0.0.0.0',
+      address: localIp,
       type: 'udp4'
     }
   });
