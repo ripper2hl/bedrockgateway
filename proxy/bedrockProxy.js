@@ -1,7 +1,52 @@
 const bedrock = require('bedrock-protocol');
 const { ServerAdvertisement } = require('bedrock-protocol');
-const { getAllServers } = require('../database/sqliteConfig');
+const { getAllServers, addServer } = require('../database/sqliteConfig');
 const dummyPackets = require('./dummyPackets');
+
+const MAIN_MENU_ID = 1000;
+const ADD_SERVER_ID = 1001;
+const DIRECT_CONNECT_ID = 1002;
+
+function sendMainMenu(client) {
+  const serversList = getAllServers();
+  const buttons = [
+    { text: "Conexión Directa\n(Escribir IP)" },
+    { text: "Añadir Servidor\n(Guardar en lista)" }
+  ];
+
+  for (const server of serversList) {
+    buttons.push({ text: `${server.name}\n${server.target_ip}:${server.target_port}` });
+  }
+
+  const formPayload = {
+    type: 'form',
+    title: 'BedrockGateway',
+    content: 'Selecciona una opción o un servidor:',
+    buttons,
+  };
+
+  client.write('modal_form_request', {
+    form_id: MAIN_MENU_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+function sendAddServerForm(client, isDirectConnect = false) {
+  const formPayload = {
+    type: 'custom_form',
+    title: isDirectConnect ? 'Conexión Directa' : 'Añadir Servidor',
+    content: [
+      { type: 'input', text: 'Nombre del Servidor (Opcional)', placeholder: 'Mi Servidor', default: '' },
+      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: '' },
+      { type: 'input', text: 'Puerto', placeholder: '19132', default: '19132' }
+    ]
+  };
+
+  client.write('modal_form_request', {
+    form_id: isDirectConnect ? DIRECT_CONNECT_ID : ADD_SERVER_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
 
 function startProxy(host, port) {
   // Arranca el servidor
@@ -156,47 +201,73 @@ function startProxy(host, port) {
         client.write('chunk_radius_update', { chunk_radius: packet.chunk_radius });
       });
 
-      // El cliente confirma que ya se inicializó su personaje en el mundo
       client.on('set_local_player_as_initialized', (packet) => {
-        console.log('[PROXY] Cliente Spawned! Enviando formulario de selección...');
-        
-        const servers = getAllServers();
-        const buttons = servers.map((server) => ({ text: server.name }));
-        const formId = Math.floor(Math.random() * 1e6);
-
-        const formPayload = {
-          type: 'form',
-          title: 'BedrockGateway',
-          content: 'Selecciona el servidor al que deseas conectarte:',
-          buttons,
-        };
-
-        client.write('modal_form_request', {
-          form_id: formId,
-          data: JSON.stringify(formPayload),
-        });
+        console.log('[PROXY] Cliente Spawned! Enviando menú principal...');
+        sendMainMenu(client);
       });
 
       client.on('modal_form_response', (packet) => {
         try {
-          if (!packet.has_response_data) return;
-          const selectedIndex = Number(JSON.parse(packet.data));
-          
-          const serversList = getAllServers(); // Fetch servers here to avoid ReferenceError
-
-          if (Number.isNaN(selectedIndex) || selectedIndex < 0 || selectedIndex >= serversList.length) {
-            console.error('[PROXY] Selección inválida:', packet.data);
+          if (!packet.has_response_data) {
+            // El usuario cerró el formulario (presionó B o la X)
+            // Le volvemos a mandar el menú principal para que no se quede atrapado
+            sendMainMenu(client);
             return;
           }
 
-          const selectedServer = serversList[selectedIndex];
-          console.log(`[PROXY] Transfiriendo a ${selectedServer.name} -> ${selectedServer.target_ip}:${selectedServer.target_port}`);
+          const parsedData = JSON.parse(packet.data);
 
-          client.write('transfer', {
-            server_address: selectedServer.target_ip,
-            port: Number(selectedServer.target_port),
-            reload_world: false
-          });
+          if (packet.form_id === MAIN_MENU_ID) {
+            const selectedIndex = Number(parsedData);
+            
+            if (selectedIndex === 0) {
+              sendAddServerForm(client, true); // Conexión directa
+            } else if (selectedIndex === 1) {
+              sendAddServerForm(client, false); // Añadir servidor
+            } else {
+              // Es un servidor de la lista
+              const serversList = getAllServers();
+              const serverIndex = selectedIndex - 2; // Descontamos los 2 primeros botones
+
+              if (serverIndex >= 0 && serverIndex < serversList.length) {
+                const selectedServer = serversList[serverIndex];
+                console.log(`[PROXY] Transfiriendo a ${selectedServer.name} -> ${selectedServer.target_ip}:${selectedServer.target_port}`);
+
+                client.write('transfer', {
+                  server_address: selectedServer.target_ip,
+                  port: Number(selectedServer.target_port),
+                  reload_world: false
+                });
+              }
+            }
+          } else if (packet.form_id === ADD_SERVER_ID || packet.form_id === DIRECT_CONNECT_ID) {
+            // parsedData es un array con las respuestas de los inputs: [nombre, ip, puerto]
+            const name = parsedData[0] || 'Servidor Personalizado';
+            const ip = parsedData[1];
+            const port = Number(parsedData[2]) || 19132;
+
+            if (!ip || ip.trim() === '') {
+              // IP inválida, regresar al menú
+              sendMainMenu(client);
+              return;
+            }
+
+            if (packet.form_id === ADD_SERVER_ID) {
+              // Guardar en la base de datos
+              addServer({ name, target_ip: ip, target_port: port });
+              console.log(`[PROXY] Servidor añadido: ${name} (${ip}:${port})`);
+              // Volver al menú principal para que vea su nuevo servidor
+              sendMainMenu(client);
+            } else {
+              // Conexión Directa
+              console.log(`[PROXY] Conexión Directa a ${ip}:${port}`);
+              client.write('transfer', {
+                server_address: ip,
+                port: port,
+                reload_world: false
+              });
+            }
+          }
         } catch (error) {
           console.error('[PROXY] Error en formulario:', error);
         }

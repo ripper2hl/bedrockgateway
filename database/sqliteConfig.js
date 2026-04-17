@@ -28,9 +28,19 @@ function initDb() {
       { name: 'The Hive', target_ip: 'geo.hivebedrock.network', target_port: 19132 },
       { name: 'CubeCraft Games', target_ip: 'mco.cubecraft.net', target_port: 19132 },
       { name: 'Galaxite', target_ip: 'play.galaxite.net', target_port: 19132 },
-      { name: 'NetherGames', target_ip: 'play.nethergames.org', target_port: 19132 },
-      { name: 'Hyperlands', target_ip: 'play.hyperlandsmc.net', target_port: 19132 },
-      { name: 'Zeqa', target_ip: 'zeqa.net', target_port: 19132 }
+      { name: 'MineLatino Network', target_ip: 'play.minelatino.com', target_port: 19132 },
+      { name: 'HyCraft', target_ip: 'play.hycraft.us', target_port: 19132 },
+      { name: 'UniversoCraft', target_ip: 'mc.universocraft.com', target_port: 19132 },
+      { name: 'DeathZone', target_ip: 'play.deathzone.es', target_port: 19132 },
+      { name: 'SurvivalRolemine', target_ip: 'mc.srolemine.com', target_port: 19132 },
+      { name: 'LibreCraft', target_ip: 'librecraft.juegos', target_port: 19132 },
+      { name: 'ZoneCraft', target_ip: 'play.zonecraft.es', target_port: 19132 },
+      { name: 'OnlyMC', target_ip: 'play.onlymc.us', target_port: 19132 },
+      { name: 'Blurkit', target_ip: 'mc.blurkit.net', target_port: 19132 },
+      { name: 'Mooncraft', target_ip: 'mooncraft.es', target_port: 19132 },
+      { name: 'EventyrMC', target_ip: 'play.eventyr.lat', target_port: 19132 },
+      { name: 'PixelCub', target_ip: 'mc.pixelcub.net', target_port: 19132 },
+      { name: 'RoundCraft', target_ip: 'mc.roundcraft.lat', target_port: 19132 }
     ];
 
     const insert = db.prepare(`
