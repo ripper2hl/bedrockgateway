@@ -62,6 +62,11 @@ function initDb() {
  * @returns {import('better-sqlite3').RunResult}
  */
 function addServer(serverObj) {
+  const check = db.prepare('SELECT id FROM custom_servers WHERE target_ip = ? AND target_port = ?').get(serverObj.target_ip, serverObj.target_port);
+  if (check) {
+    return { changes: 0, lastInsertRowid: check.id }; // Ya existe
+  }
+
   const insert = db.prepare(`
     INSERT INTO custom_servers (name, target_ip, target_port)
     VALUES (@name, @target_ip, @target_port)
