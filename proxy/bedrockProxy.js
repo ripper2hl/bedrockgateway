@@ -4,7 +4,7 @@ const { getAllServers } = require('../database/sqliteConfig');
 
 function startProxy(host, port) {
   // Arranca el servidor
-  const server = new bedrock.Server({
+  const server = bedrock.createServer({
     host: host,
     port: port,
     offline: true, // Vital para no pedir verificación extra a Xbox Live
@@ -17,28 +17,82 @@ function startProxy(host, port) {
 
   console.log(`[PROXY] ✅ Bedrock Proxy vivo y escuchando en el puerto ${port}`);
 
-  server.on('client', (client) => {
+  server.on('connect', (client) => {
     console.log('🔥 CONEXIÓN RAW');
     console.log('[PROXY] Jugador conectado desde:', client.address?.address || 'desconocido');
 
-    // 🔥 PATCH DEFINITIVO V3: Interceptamos el paquete 'login' ANTES que la librería
-    client.prependListener('login', (packet) => {
-      try {
-        // Leemos la identidad tal cual nos la mandó el jugador
-        let identityObj = JSON.parse(packet.tokens.identity);
-        
-        // Verificamos si tiene el formato "envuelto" de las consolas (Switch/Xbox)
-        if (identityObj && identityObj.Certificate) {
-          console.log('[PROXY] 🛠️ Desenvolviendo AuthChain de Consola (Nintendo Switch detectado)');
-          // Sobrescribimos el payload original con el certificado real (que contiene el 'chain')
-          // Esto engaña a la librería para que lo procese como un cliente normal (celular/PC).
-          packet.tokens.identity = identityObj.Certificate;
-        }
-      } catch (err) {
-        // Si no se puede parsear, es porque ya es un formato normal o hubo un error.
-        // Lo dejamos pasar silenciosamente.
-      }
+    // 🔥 PARCHE V5 (CORREGIDO): Bypass de Encriptación eliminando el listener nativo
+    // Evitamos que 'bedrock-protocol' intente encriptar (ya que no somos Mojang y la consola nos rechazaría).
+    client.removeAllListeners('server.client_handshake');
+    client.on('server.client_handshake', () => {
+      console.log('[PROXY] 🛡️ Saltando encriptación y enviando login_success directo (Estilo BedrockConnect)');
+      client.write('play_status', { status: 'login_success' });
+      client.status = 3; // ClientStatus.Initializing
+      client.emit('join');
     });
+
+    // 🔥 PATCH DEFINITIVO V4: Bypass de validación JWT para Switch/Consolas
+    // Al estar en offline mode, no necesitamos validar firmas. Extraemos la data directamente
+    // evitando crasheos (Unexpected end of JSON input) si la consola manda un JWT o cadena vacía.
+    client.decodeLoginJWT = function (authTokens, skinTokens, authToken = '') {
+      let finalKey = null;
+      let data = {};
+
+      // 1. Extraer data del chain
+      if (Array.isArray(authTokens)) {
+        for (const token of authTokens) {
+          if (!token || typeof token !== 'string') continue;
+          const parts = token.split('.');
+          if (parts.length !== 3) continue;
+
+          try {
+            const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
+            const payload = JSON.parse(payloadStr);
+            if (payload.identityPublicKey) {
+              finalKey = payload.identityPublicKey;
+            }
+            data = { ...data, ...payload };
+          } catch (e) {
+            // Ignoramos tokens inválidos
+          }
+        }
+      }
+
+      // 2. Extraer data del authToken si existe
+      if (authToken && typeof authToken === 'string') {
+        const parts = authToken.split('.');
+        if (parts.length === 3) {
+          try {
+            const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
+            const payload = JSON.parse(payloadStr);
+            data = { ...data, ...payload };
+            if (payload.identityPublicKey) {
+              finalKey = payload.identityPublicKey; // El token principal tiene prioridad
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 3. Extraer data del skin
+      let skinData = {};
+      if (skinTokens && typeof skinTokens === 'string') {
+        const parts = skinTokens.split('.');
+        if (parts.length === 3) {
+          try {
+            const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
+            skinData = JSON.parse(payloadStr);
+          } catch (e) {}
+        }
+      }
+
+      // 4. Fallback si no hay llave pública (para que no crashee la encriptación)
+      // Aunque en clientes reales de Bedrock siempre vendrá una llave.
+      if (!finalKey) {
+        console.warn('[PROXY] ⚠️ No se encontró identityPublicKey en los tokens. La encriptación podría fallar.');
+      }
+
+      return { key: finalKey, userData: data, skinData };
+    };
 
     client.on('error', (error) => {
       console.error('[PROXY] Error en cliente Bedrock:', error.message || error);
