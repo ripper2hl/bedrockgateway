@@ -1,6 +1,7 @@
 const bedrock = require('bedrock-protocol');
 const { ServerAdvertisement } = require('bedrock-protocol');
 const { getAllServers } = require('../database/sqliteConfig');
+const dummyPackets = require('./dummyPackets');
 
 function startProxy(host, port) {
   // Arranca el servidor
@@ -99,30 +100,82 @@ function startProxy(host, port) {
     });
 
     client.on('join', () => {
-      console.log('[PROXY] Jugador en el mundo. Enviando formulario...');
+      console.log('[PROXY] Enviando resource_packs_info...');
 
-      const servers = getAllServers();
-      const buttons = servers.map((server) => ({ text: server.name }));
-      const formId = Math.floor(Math.random() * 1e6);
+      // Avanzamos el estado de carga
+      client.write('resource_packs_info', {
+        must_accept: false,
+        has_addons: false,
+        has_scripts: false,
+        disable_vibrant_visuals: false,
+        force_server_packs: false,
+        behavior_packs: [],
+        texture_packs: [],
+        world_template: {
+          uuid: '00000000-0000-0000-0000-000000000000',
+          version: '*'
+        }
+      });
 
-      const formPayload = {
-        type: 'form',
-        title: 'BedrockGateway',
-        content: 'Selecciona el servidor al que deseas conectarte:',
-        buttons,
-      };
+      client.on('resource_pack_client_response', (packet) => {
+        if (packet.response_status === 'have_all_packs') {
+          console.log('[PROXY] Cliente tiene los packs, enviando resource_pack_stack...');
+          client.write('resource_pack_stack', {
+            must_accept: false,
+            behavior_packs: [],
+            resource_packs: [],
+            game_version: '*',
+            experiments: [],
+            experiments_previously_used: false
+          });
+        } else if (packet.response_status === 'completed') {
+          console.log('[PROXY] Cliente completó carga de packs. Generando mundo dummy...');
 
-      client.write('modal_form_request', {
-        form_id: formId,
-        payload: JSON.stringify(formPayload),
+          // 1. Enviamos el StartGamePacket para que deje la pantalla de carga
+          try {
+            client.write('start_game', dummyPackets.startGame);
+          } catch(e) {
+            console.error('[PROXY] Error enviando start_game:', e.message);
+          }
+
+          // 2. Enviamos el CreativeContent y BiomeDefinitionList (necesarios)
+          try {
+            client.write('creative_content', dummyPackets.creativeContent);
+            client.write('biome_definition_list', dummyPackets.biomeDefinitionList);
+            client.write('play_status', { status: 'player_spawn' });
+          } catch(e) {
+            console.error('[PROXY] Error enviando paquetes adicionales:', e.message);
+          }
+
+          console.log('[PROXY] Enviando formulario de selección...');
+          
+          setTimeout(() => {
+            const servers = getAllServers();
+            const buttons = servers.map((server) => ({ text: server.name }));
+            const formId = Math.floor(Math.random() * 1e6);
+
+            const formPayload = {
+              type: 'form',
+              title: 'BedrockGateway',
+              content: 'Selecciona el servidor al que deseas conectarte:',
+              buttons,
+            };
+
+            client.write('modal_form_request', {
+              form_id: formId,
+              data: JSON.stringify(formPayload),
+            });
+          }, 500); // Pequeño delay para asegurar que el cliente procesó el spawn
+        }
       });
 
       client.on('modal_form_response', (packet) => {
         try {
-          const selectedIndex = Number(JSON.parse(packet.payload));
+          if (!packet.has_response_data) return;
+          const selectedIndex = Number(JSON.parse(packet.data));
 
           if (Number.isNaN(selectedIndex) || selectedIndex < 0 || selectedIndex >= servers.length) {
-            console.error('[PROXY] Selección inválida:', packet.payload);
+            console.error('[PROXY] Selección inválida:', packet.data);
             return;
           }
 
