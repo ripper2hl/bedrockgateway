@@ -66,7 +66,7 @@ function startDns(localIp) {
   server.listen({
     udp: {
       port: 53,
-      address: localIp,
+      address: '0.0.0.0', // Importante para Docker: escuchar en TODAS las interfaces
       type: 'udp4'
     }
   });

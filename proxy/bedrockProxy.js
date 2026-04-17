@@ -1,6 +1,6 @@
 const bedrock = require('bedrock-protocol');
 const { ServerAdvertisement } = require('bedrock-protocol');
-const { getAllServers, addServer } = require('../database/sqliteConfig');
+const { getAllServers, addServer, updateServerStatus } = require('../database/sqliteConfig');
 const dummyPackets = require('./dummyPackets');
 
 const MAIN_MENU_ID = 1000;
@@ -15,7 +15,11 @@ function sendMainMenu(client) {
   ];
 
   for (const server of serversList) {
-    buttons.push({ text: `${server.name}\n${server.target_ip}:${server.target_port}` });
+    if (server.online_status === 1) {
+      buttons.push({ text: `${server.name}\n🟢 ${server.players_online} Jugadores` });
+    } else {
+      buttons.push({ text: `${server.name}\n🔴 [OFFLINE]` });
+    }
   }
 
   const formPayload = {
@@ -29,6 +33,36 @@ function sendMainMenu(client) {
     form_id: MAIN_MENU_ID,
     data: JSON.stringify(formPayload),
   });
+}
+
+// Tarea recurrente para actualizar el estado de los servidores en 2do plano
+function startBackgroundPings() {
+  const PING_INTERVAL = 60000; // 1 minuto
+  
+  setInterval(async () => {
+    const servers = getAllServers();
+    for (const server of servers) {
+      try {
+        const result = await bedrock.ping({ host: server.target_ip, port: server.target_port, timeout: 3000 });
+        updateServerStatus(server.id, 1, result.playersOnline);
+      } catch (error) {
+        updateServerStatus(server.id, 0, 0);
+      }
+    }
+  }, PING_INTERVAL);
+
+  // Ejecutar el primer ping inmediatamente (fuera del setInterval)
+  setTimeout(async () => {
+    const servers = getAllServers();
+    for (const server of servers) {
+      try {
+        const result = await bedrock.ping({ host: server.target_ip, port: server.target_port, timeout: 3000 });
+        updateServerStatus(server.id, 1, result.playersOnline);
+      } catch (error) {
+        updateServerStatus(server.id, 0, 0);
+      }
+    }
+  }, 1000);
 }
 
 function sendAddServerForm(client, isDirectConnect = false) {
@@ -62,6 +96,9 @@ function startProxy(host, port) {
   });
 
   console.log(`[PROXY] ✅ Bedrock Proxy vivo y escuchando en el puerto ${port}`);
+  
+  // Iniciar tarea de ping en segundo plano
+  startBackgroundPings();
 
   server.on('connect', (client) => {
     console.log('🔥 CONEXIÓN RAW');

@@ -15,11 +15,17 @@ function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       target_ip TEXT NOT NULL,
-      target_port INTEGER NOT NULL
+      target_port INTEGER NOT NULL,
+      online_status INTEGER DEFAULT 0,
+      players_online INTEGER DEFAULT 0
     )
   `);
 
   createTable.run();
+
+  // Asegurar compatibilidad para bases de datos existentes
+  try { db.prepare('ALTER TABLE custom_servers ADD COLUMN online_status INTEGER DEFAULT 0').run(); } catch (e) { /* Columna ya existe */ }
+  try { db.prepare('ALTER TABLE custom_servers ADD COLUMN players_online INTEGER DEFAULT 0').run(); } catch (e) { /* Columna ya existe */ }
 
   const count = db.prepare('SELECT COUNT(*) as count FROM custom_servers').get().count;
   if (count === 0) {
@@ -71,15 +77,28 @@ function addServer(serverObj) {
  */
 function getAllServers() {
   const select = db.prepare(`
-    SELECT id, name, target_ip, target_port
+    SELECT id, name, target_ip, target_port, online_status, players_online
     FROM custom_servers
   `);
 
   return select.all();
 }
 
+/**
+ * Actualiza el estado online y cantidad de jugadores de un servidor.
+ */
+function updateServerStatus(id, online_status, players_online) {
+  const update = db.prepare(`
+    UPDATE custom_servers
+    SET online_status = @online_status, players_online = @players_online
+    WHERE id = @id
+  `);
+  return update.run({ id, online_status, players_online });
+}
+
 module.exports = {
   initDb,
   addServer,
   getAllServers,
+  updateServerStatus,
 };
