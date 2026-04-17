@@ -181,18 +181,21 @@ function startProxy(host, port) {
         try {
           if (!packet.has_response_data) return;
           const selectedIndex = Number(JSON.parse(packet.data));
+          
+          const serversList = getAllServers(); // Fetch servers here to avoid ReferenceError
 
-          if (Number.isNaN(selectedIndex) || selectedIndex < 0 || selectedIndex >= servers.length) {
+          if (Number.isNaN(selectedIndex) || selectedIndex < 0 || selectedIndex >= serversList.length) {
             console.error('[PROXY] Selección inválida:', packet.data);
             return;
           }
 
-          const selectedServer = servers[selectedIndex];
+          const selectedServer = serversList[selectedIndex];
           console.log(`[PROXY] Transfiriendo a ${selectedServer.name} -> ${selectedServer.target_ip}:${selectedServer.target_port}`);
 
           client.write('transfer', {
             server_address: selectedServer.target_ip,
-            port: selectedServer.target_port,
+            port: Number(selectedServer.target_port),
+            reload_world: false
           });
         } catch (error) {
           console.error('[PROXY] Error en formulario:', error);

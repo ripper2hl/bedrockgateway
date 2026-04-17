@@ -20,6 +20,33 @@ function initDb() {
   `);
 
   createTable.run();
+
+  const count = db.prepare('SELECT COUNT(*) as count FROM custom_servers').get().count;
+  if (count === 0) {
+    console.log('[DB] Base de datos vacía. Insertando servidores populares por defecto...');
+    const defaultServers = [
+      { name: 'The Hive', target_ip: 'geo.hivebedrock.network', target_port: 19132 },
+      { name: 'CubeCraft Games', target_ip: 'mco.cubecraft.net', target_port: 19132 },
+      { name: 'Galaxite', target_ip: 'play.galaxite.net', target_port: 19132 },
+      { name: 'NetherGames', target_ip: 'play.nethergames.org', target_port: 19132 },
+      { name: 'Hyperlands', target_ip: 'play.hyperlandsmc.net', target_port: 19132 },
+      { name: 'Zeqa', target_ip: 'zeqa.net', target_port: 19132 }
+    ];
+
+    const insert = db.prepare(`
+      INSERT INTO custom_servers (name, target_ip, target_port)
+      VALUES (@name, @target_ip, @target_port)
+    `);
+
+    const insertMany = db.transaction((servers) => {
+      for (const server of servers) {
+        insert.run(server);
+      }
+    });
+
+    insertMany(defaultServers);
+    console.log('[DB] Servidores por defecto añadidos correctamente.');
+  }
 }
 
 /**
