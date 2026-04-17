@@ -15,11 +15,11 @@ function sendMainMenu(client) {
   ];
 
   for (const server of serversList) {
+    // Filtro inteligente: Solo mostrar servidores que estén en línea
     if (server.online_status === 1) {
       buttons.push({ text: `${server.name}\n🟢 ${server.players_online} Jugadores` });
-    } else {
-      buttons.push({ text: `${server.name}\n🔴 [OFFLINE]` });
     }
+    // Si está offline (0), simplemente lo ignoramos y no se le muestra al jugador
   }
 
   const formPayload = {
