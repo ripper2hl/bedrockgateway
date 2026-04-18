@@ -8,19 +8,22 @@ const ADD_SERVER_ID = 1001;
 const DIRECT_CONNECT_ID = 1002;
 
 function sendMainMenu(client) {
-  const serversList = getAllServers();
+  const allServers = getAllServers();
+  // Filtrar solo los servidores online para el menú
+  const onlineServers = allServers.filter(s => s.online_status === 1);
+
   const buttons = [
     { text: "Conexión Directa\n(Escribir IP)" },
     { text: "Añadir Servidor\n(Guardar en lista)" }
   ];
 
-  for (const server of serversList) {
-    // Filtro inteligente: Solo mostrar servidores que estén en línea
-    if (server.online_status === 1) {
-      buttons.push({ text: `${server.name}\n🟢 ${server.players_online} Jugadores` });
-    }
-    // Si está offline (0), simplemente lo ignoramos y no se le muestra al jugador
+  for (const server of onlineServers) {
+    buttons.push({ text: `${server.name}\n🟢 ${server.players_online} Jugadores` });
   }
+
+  // Guardamos la lista filtrada en el cliente para que la respuesta del formulario
+  // use el mismo índice que los botones mostrados.
+  client._onlineServers = onlineServers;
 
   const formPayload = {
     type: 'form',
@@ -262,12 +265,12 @@ function startProxy(host, port) {
             } else if (selectedIndex === 1) {
               sendAddServerForm(client, false); // Añadir servidor
             } else {
-              // Es un servidor de la lista
-              const serversList = getAllServers();
+              // Es un servidor de la lista (usamos la misma lista filtrada que se mostró en el menú)
+              const onlineServers = client._onlineServers || [];
               const serverIndex = selectedIndex - 2; // Descontamos los 2 primeros botones
 
-              if (serverIndex >= 0 && serverIndex < serversList.length) {
-                const selectedServer = serversList[serverIndex];
+              if (serverIndex >= 0 && serverIndex < onlineServers.length) {
+                const selectedServer = onlineServers[serverIndex];
                 console.log(`[PROXY] Transfiriendo a ${selectedServer.name} -> ${selectedServer.target_ip}:${selectedServer.target_port}`);
 
                 client.write('transfer', {
