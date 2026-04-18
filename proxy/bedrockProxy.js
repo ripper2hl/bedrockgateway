@@ -246,7 +246,7 @@ function startProxy(host, port) {
         sendMainMenu(client);
       });
 
-      client.on('modal_form_response', (packet) => {
+      client.on('modal_form_response', async (packet) => {
         try {
           if (!packet.has_response_data) {
             // El usuario cerró el formulario (presionó B o la X)
@@ -294,8 +294,21 @@ function startProxy(host, port) {
 
             if (packet.form_id === ADD_SERVER_ID) {
               // Guardar en la base de datos
-              addServer({ name, target_ip: ip, target_port: port });
+              const result = addServer({ name, target_ip: ip, target_port: port });
               console.log(`[PROXY] Servidor añadido: ${name} (${ip}:${port})`);
+
+              // Ping inmediato: verificamos si el servidor está vivo para que aparezca en el menú al instante
+              if (result.changes > 0) {
+                try {
+                  const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
+                  updateServerStatus(result.lastInsertRowid, 1, pingResult.playersOnline);
+                  console.log(`[PROXY] Ping exitoso a ${name}: ${pingResult.playersOnline} jugadores`);
+                } catch (e) {
+                  updateServerStatus(result.lastInsertRowid, 0, 0);
+                  console.log(`[PROXY] ${name} no respondió al ping (se añadió pero aparecerá offline)`);
+                }
+              }
+
               // Volver al menú principal para que vea su nuevo servidor
               sendMainMenu(client);
             } else {
