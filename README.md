@@ -1,57 +1,98 @@
 # BedrockGateway
 
-BedrockGateway es una solución local en Node.js que permite a jugadores de Minecraft Bedrock en consolas (Xbox, Switch, PlayStation) usar servidores personalizados mediante DNS spoofing y un proxy UDP transparente.
+BedrockGateway es un servidor proxy DNS + Minecraft Bedrock construido 100% en Node.js. 
+Actúa como una alternativa moderna y altamente optimizada a herramientas como BedrockConnect, permitiendo a los jugadores de consolas (Nintendo Switch, Xbox, PlayStation) conectarse a cualquier servidor externo (Custom Servers) saltándose las restricciones de Mojang.
 
-## ¿Por qué usar BedrockGateway?
+## ✨ Características Principales
 
-Las consolas de Minecraft Bedrock bloquean la configuración de servidores personalizados de terceros y fuerzan el acceso solo a servidores oficiales. BedrockGateway resuelve este problema haciendo que la consola crea que se está conectando a un servidor oficial, mientras redirige la conexión a un proxy local que permite seleccionar servidores personalizados.
+- **Intercepción DNS Automática:** Redirige servidores destacados como "The Hive" o "CubeCraft" hacia el proxy local.
+- **Inyección de UI en Juego:** Crea un "Limbo Server" hiper-optimizado que engaña a la consola para inyectarle un formulario interactivo nativo (sin necesidad de librerías de generación de mundos pesadas).
+- **Almacenamiento Local (SQLite):** Guarda tus servidores favoritos permanentemente.
+- **Filtro Inteligente en Tiempo Real:** El proxy tiene una tarea en segundo plano que hace "Ping" cada 60 segundos a tus servidores. **El menú del juego ocultará automáticamente los servidores inactivos**, mostrando solo los que están listos para jugar.
+- **API REST Integrada:** Agrega nuevos servidores masivamente usando llamadas HTTP (URLs, Listas Locales o Archivos JSON).
 
-## Arquitectura / ¿Cómo funciona?
+---
 
-1. El usuario configura la IP de su PC local como DNS primario en la consola.
-2. El módulo DNS Forwarder, implementado con `dns2`, escucha en el puerto `53`.
-3. Cuando la consola resuelve un dominio de servidor oficial destacado (por ejemplo, `mco.cubecraft.net`), el DNS responde con la IP local, secuestrando la conexión.
-4. Para cualquier otro dominio (como Netflix o Xbox Live), el DNS realiza un fallback transparente hacia `1.1.1.1` (Cloudflare), de modo que la consola no pierde acceso a internet.
-5. El módulo Bedrock Proxy, basado en `bedrock-protocol`, escucha en el puerto `19132`.
-6. El jugador redirigido aterriza en el proxy local y desde allí se le presenta un formulario nativo en el juego para elegir qué servidor real desea conectar.
-7. El módulo API REST, construido con `express`, y la base de datos `better-sqlite3` administran y persisten la lista de servidores personalizados del usuario.
+## 🚀 Uso Rápido (Local con Node.js)
 
-## Requisitos Previos
+Requiere **Node.js 18+** instalado.
 
-- Node.js v18 o superior
-- npm 9 o superior
-- Acceso administrativo para escuchar en el puerto `53` (puede requerir permisos elevados en algunos sistemas)
+1. Instala las dependencias:
+   ```bash
+   npm install
+   ```
+2. Inicia el servidor (es posible que requieras privilegios de Administrador/root para abrir el puerto DNS 53):
+   ```bash
+  node index.js
+   ```
 
-## Instalación y Uso
+El servidor detectará automáticamente tu IP local e iniciará los servicios.
+En tu consola de videojuegos, solo cambia tu DNS Primario a la IP local de tu computadora y entra a un Servidor Destacado (ej. The Hive).
 
+---
+
+## 🐳 Uso con Docker (Recomendado)
+
+Si prefieres usar contenedores, BedrockGateway está completamente listo para Docker.
+
+### Construir la imagen
 ```bash
-npm install express better-sqlite3 dns2
-npm install --save-dev nodemon
+docker build -t bedrock-gateway .
 ```
 
-Para ejecutar el proyecto durante el desarrollo:
+### Ejecutar el contenedor
+**⚠️ IMPORTANTE:** Para que los jugadores de la red local puedan acceder al servidor de Minecraft, el servidor DNS debe responder con la IP real de tu máquina (no la IP del contenedor). 
+Puedes escribirla manualmente (ej. `-e HOST_IP=192.168.1.100`), o si estás en Linux/macOS, puedes usar un pequeño truco en la terminal para que la detecte y la pase automáticamente:
 
 ```bash
-npx nodemon index.js
+docker run -d \
+  --name bedrock-gateway \
+  --restart unless-stopped \
+  -e HOST_IP=$(hostname -I | awk '{print $1}') \
+  -p 53:53/udp \
+  -p 19132:19132/udp \
+  -p 3000:3000/tcp \
+  bedrock-gateway
 ```
 
-O con Node.js directamente:
+---
 
+## 🔌 API de Importación Masiva
+
+Si quieres nutrir tu base de datos de servidores rápidamente, puedes usar el puerto `3000`. Soporta 3 modos:
+
+**1. Desde un archivo JSON en tu máquina:**
 ```bash
-node index.js
+curl -X POST http://localhost:3000/api/servers/import \
+     -H "Content-Type: application/json" \
+     -d '{"file": "./servidores.json"}'
 ```
 
-## Estructura del Proyecto
+**2. Desde una URL pública en internet:**
+```bash
+curl -X POST http://localhost:3000/api/servers/import \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://url-hacia-tu-archivo/servers.json"}'
+```
 
-- `api/`
-  - Contiene los endpoints REST para administrar servidores personalizados, obtener configuración y gestionar el estado del gateway.
-- `dns/`
-  - Implementa el DNS Forwarder que intercepta resoluciones de dominios específicos y hace fallback a Cloudflare para todo lo demás.
-- `proxy/`
-  - Implementa el Bedrock Proxy UDP que recibe la conexión redirigida y presenta la selección de servidor dentro del juego.
-- `database/`
-  - Contiene la lógica de persistencia con `better-sqlite3` y los archivos de la base de datos local.
+**3. Enviando los datos en crudo (Raw JSON):**
+```bash
+curl -X POST http://localhost:3000/api/servers/import \
+     -H "Content-Type: application/json" \
+     -d '{
+       "servers": [
+         { "name": "Servidor Épico", "target_ip": "play.epico.net", "target_port": 19132 }
+       ]
+     }'
+```
 
-## Notas
+El importador evitará duplicados inteligentemente. Una vez insertados, el motor de "Pings" comenzará a evaluarlos inmediatamente para mostrarlos en tu consola si están en línea.
 
-BedrockGateway está diseñado como una solución local para entornos controlados. La configuración de DNS y los permisos de red deben ajustarse con cuidado para no interrumpir otros servicios de la red.
+---
+
+## 🛠 Arquitectura
+- `index.js`: Punto de entrada y auto-detección de red.
+- `dns/dnsForwarder.js`: Escucha en `0.0.0.0:53` y secuestra los A-Records.
+- `proxy/bedrockProxy.js`: Levanta un falso servidor Offline en el puerto `19132` inyectando `dummyPackets` e invoca la UI nativa.
+- `api/expressServer.js`: Servidor de administración en el puerto `3000`.
+- `database/sqliteConfig.js`: Administrador de la persistencia de datos.
