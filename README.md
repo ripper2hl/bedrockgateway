@@ -13,21 +13,33 @@ Actúa como una alternativa moderna y altamente optimizada a herramientas como B
 
 ---
 
-## 🚀 Uso Rápido (Local con Node.js)
+## 📋 Requisitos
 
-Requiere **Node.js 18+** instalado.
+- **Node.js 18+** (o Docker)
+- La consola (Switch/Xbox/PS) debe estar en la **misma red local** que la máquina que ejecuta BedrockGateway.
+- Permisos de **root/Administrador** para abrir el puerto DNS 53.
+
+---
+
+## 🚀 Uso Rápido (Local con Node.js)
 
 1. Instala las dependencias:
    ```bash
    npm install
    ```
-2. Inicia el servidor (es posible que requieras privilegios de Administrador/root para abrir el puerto DNS 53):
+2. Inicia el servidor (requiere privilegios de root para el puerto DNS 53):
    ```bash
-  node index.js
+   sudo node index.js
    ```
 
 El servidor detectará automáticamente tu IP local e iniciará los servicios.
-En tu consola de videojuegos, solo cambia tu DNS Primario a la IP local de tu computadora y entra a un Servidor Destacado (ej. The Hive).
+
+### Configurar tu consola
+
+1. En tu consola, ve a **Configuración de Red** → **Configuración DNS**.
+2. Cambia el **DNS Primario** a la IP de tu computadora (la que el servidor imprime al iniciar).
+3. Abre Minecraft y entra a un **Servidor Destacado** (ej. The Hive o CubeCraft).
+4. En lugar de conectarte al servidor real, verás el menú de BedrockGateway.
 
 ---
 
@@ -57,9 +69,35 @@ docker run -d \
 
 ---
 
-## 🔌 API de Importación Masiva
+## ⚙️ Variables de Entorno
 
-Si quieres nutrir tu base de datos de servidores rápidamente, puedes usar el puerto `3000`. Soporta 3 modos:
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `HOST_IP` | IP que el DNS devuelve a las consolas. Si no se define, se auto-detecta. | Auto-detectada |
+| `API_PORT` | Puerto de la API REST de administración. | `3000` |
+| `PROXY_PORT` | Puerto del proxy Bedrock (donde escucha las conexiones de las consolas). | `19132` |
+
+---
+
+## 🔌 API REST
+
+### Listar servidores registrados
+
+```bash
+curl http://localhost:3000/api/servers
+```
+
+### Agregar un servidor manualmente
+
+```bash
+curl -X POST http://localhost:3000/api/servers \
+     -H "Content-Type: application/json" \
+     -d '{ "name": "Mi Servidor", "target_ip": "play.ejemplo.com", "target_port": 19132 }'
+```
+
+### Importación masiva
+
+Si quieres nutrir tu base de datos de servidores rápidamente, el endpoint `/api/servers/import` soporta 3 modos:
 
 **1. Desde un archivo JSON en tu máquina:**
 ```bash
@@ -91,8 +129,35 @@ El importador evitará duplicados inteligentemente. Una vez insertados, el motor
 ---
 
 ## 🛠 Arquitectura
+
+```
+Consola (Switch/Xbox/PS)
+    │
+    ▼
+┌──────────────────────┐
+│  DNS Server (:53)    │ ── Intercepta "The Hive" / "CubeCraft" ──▶ Devuelve IP local
+└──────────────────────┘
+    │
+    ▼
+┌──────────────────────┐
+│  Proxy Bedrock       │ ── Crea un mundo "Limbo" con UI nativa
+│  (:19132)            │ ── El jugador selecciona un servidor
+└──────────────────────┘
+    │
+    ▼
+  Transfer al servidor real (ej. play.nethergames.org:19132)
+```
+
+**Archivos principales:**
 - `index.js`: Punto de entrada y auto-detección de red.
 - `dns/dnsForwarder.js`: Escucha en `0.0.0.0:53` y secuestra los A-Records.
 - `proxy/bedrockProxy.js`: Levanta un falso servidor Offline en el puerto `19132` inyectando `dummyPackets` e invoca la UI nativa.
 - `api/expressServer.js`: Servidor de administración en el puerto `3000`.
 - `database/sqliteConfig.js`: Administrador de la persistencia de datos.
+
+---
+
+## 📄 Licencia
+
+Este proyecto está bajo la licencia [MIT](LICENSE).
+
