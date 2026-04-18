@@ -1,0 +1,7 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+database/gateway.db
+database/gateway.db-wal
+database/gateway.db-shm
