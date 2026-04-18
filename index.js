@@ -17,7 +17,7 @@ function getLocalIp() {
       }
     }
   }
-  return '192.168.3.84'; // Fallback de seguridad
+  return '127.0.0.1'; // Fallback final genérico (localhost)
 }
 
 const API_PORT = process.env.API_PORT || 3000;
