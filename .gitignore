@@ -50,3 +50,15 @@ Thumbs.db
 # IDE/Editor directories
 .vscode/
 .idea/
+
+# SQLite WAL/SHM auxiliary files
+*.db-wal
+*.db-shm
+
+# bedrock-protocol auth cache
+profiles/
+
+# Runtime logs
+log.txt
+*.log
+servidores.json
