@@ -40,23 +40,41 @@ function startApi(port) {
     }
   });
 
-  // Nuevo endpoint para importar servidores desde una URL JSON externa
+  // Nuevo endpoint para importar servidores desde una URL JSON externa, lista local o archivo en disco
   app.post('/api/servers/import', async (req, res) => {
-    const { url } = req.body;
+    const { url, servers, file } = req.body;
 
-    if (!url) {
-      return res.status(400).json({ error: 'Falta proveer una url en el body (JSON)' });
+    if (!url && !servers && !file) {
+      return res.status(400).json({ error: 'Falta proveer una "url", un arreglo "servers", o una ruta "file" en el body' });
     }
 
     try {
-      // Intentamos descargar el JSON desde la URL provista
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status} al descargar el archivo`);
-      
-      const data = await response.json();
+      let data = [];
+
+      if (url) {
+        // Intentamos descargar el JSON desde la URL provista
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status} al descargar el archivo`);
+        data = await response.json();
+      } else if (file) {
+        // Leemos un archivo JSON local en la máquina
+        const fs = require('fs');
+        const path = require('path');
+        const absolutePath = path.resolve(file);
+        
+        if (!fs.existsSync(absolutePath)) {
+          return res.status(404).json({ error: `No se encontró el archivo local en la ruta: ${absolutePath}` });
+        }
+        
+        const fileContent = fs.readFileSync(absolutePath, 'utf8');
+        data = JSON.parse(fileContent);
+      } else if (servers) {
+        // Usamos el arreglo proporcionado en la misma petición
+        data = servers;
+      }
       
       if (!Array.isArray(data)) {
-        return res.status(400).json({ error: 'El archivo JSON descargado no es un arreglo válido' });
+        return res.status(400).json({ error: 'La información proveída no es un arreglo válido de servidores' });
       }
 
       let added = 0;
