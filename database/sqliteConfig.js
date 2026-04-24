@@ -101,9 +101,48 @@ function updateServerStatus(id, online_status, players_online) {
   return update.run({ id, online_status, players_online });
 }
 
+/**
+ * Obtiene un servidor por su ID.
+ *
+ * @param {number} id
+ * @returns {{ id: number, name: string, target_ip: string, target_port: number, online_status: number, players_online: number } | undefined}
+ */
+function getServerById(id) {
+  return db.prepare('SELECT * FROM custom_servers WHERE id = ?').get(id);
+}
+
+/**
+ * Actualiza los datos de un servidor existente (nombre, IP, puerto).
+ *
+ * @param {number} id
+ * @param {{ name: string, target_ip: string, target_port: number }} serverObj
+ * @returns {import('better-sqlite3').RunResult}
+ */
+function updateServer(id, serverObj) {
+  const update = db.prepare(`
+    UPDATE custom_servers
+    SET name = @name, target_ip = @target_ip, target_port = @target_port
+    WHERE id = @id
+  `);
+  return update.run({ id, ...serverObj });
+}
+
+/**
+ * Elimina un servidor de la base de datos por su ID.
+ *
+ * @param {number} id
+ * @returns {import('better-sqlite3').RunResult}
+ */
+function deleteServer(id) {
+  return db.prepare('DELETE FROM custom_servers WHERE id = ?').run(id);
+}
+
 module.exports = {
   initDb,
   addServer,
   getAllServers,
+  getServerById,
+  updateServer,
+  deleteServer,
   updateServerStatus,
 };

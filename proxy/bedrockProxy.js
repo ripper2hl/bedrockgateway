@@ -1,11 +1,19 @@
 const bedrock = require('bedrock-protocol');
 const { ServerAdvertisement } = require('bedrock-protocol');
-const { getAllServers, addServer, updateServerStatus } = require('../database/sqliteConfig');
+const { getAllServers, addServer, getServerById, updateServer, deleteServer, updateServerStatus } = require('../database/sqliteConfig');
 const dummyPackets = require('./dummyPackets');
 
+// IDs de formularios
 const MAIN_MENU_ID = 1000;
 const ADD_SERVER_ID = 1001;
 const DIRECT_CONNECT_ID = 1002;
+const MANAGE_MENU_ID = 1003;
+const EDIT_SELECT_ID = 1004;
+const EDIT_SERVER_ID = 1005;
+const DELETE_SELECT_ID = 1006;
+const DELETE_CONFIRM_ID = 1007;
+
+// ─── FORMULARIOS DE UI ───────────────────────────────────────────────────────
 
 function sendMainMenu(client) {
   const allServers = getAllServers();
@@ -14,7 +22,7 @@ function sendMainMenu(client) {
 
   const buttons = [
     { text: "Conexión Directa\n(Escribir IP)" },
-    { text: "Añadir Servidor\n(Guardar en lista)" }
+    { text: "Administrar Servidores\n⚙️ Agregar, Editar, Eliminar" }
   ];
 
   for (const server of onlineServers) {
@@ -38,7 +46,158 @@ function sendMainMenu(client) {
   });
 }
 
-// Tarea recurrente para actualizar el estado de los servidores en 2do plano
+function sendManageMenu(client) {
+  const formPayload = {
+    type: 'form',
+    title: 'Administrar Servidores',
+    content: 'Selecciona una acción:',
+    buttons: [
+      { text: "➕ Agregar Servidor" },
+      { text: "✏️ Editar Servidor" },
+      { text: "🗑️ Eliminar Servidor" },
+      { text: "⬅️ Volver al Menú" }
+    ],
+  };
+
+  client.write('modal_form_request', {
+    form_id: MANAGE_MENU_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+function sendAddServerForm(client) {
+  const formPayload = {
+    type: 'custom_form',
+    title: 'Añadir Servidor',
+    content: [
+      { type: 'input', text: 'Nombre del Servidor', placeholder: 'Mi Servidor', default: '' },
+      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: '' },
+      { type: 'input', text: 'Puerto', placeholder: '19132', default: '19132' }
+    ]
+  };
+
+  client.write('modal_form_request', {
+    form_id: ADD_SERVER_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+function sendDirectConnectForm(client) {
+  const formPayload = {
+    type: 'custom_form',
+    title: 'Conexión Directa',
+    content: [
+      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: '' },
+      { type: 'input', text: 'Puerto', placeholder: '19132', default: '19132' }
+    ]
+  };
+
+  client.write('modal_form_request', {
+    form_id: DIRECT_CONNECT_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+function sendEditSelectForm(client) {
+  const servers = getAllServers();
+
+  if (servers.length === 0) {
+    sendManageMenu(client);
+    return;
+  }
+
+  // Guardamos la lista completa para mapear el índice después
+  client._allServersForManage = servers;
+
+  const serverNames = servers.map(s => {
+    const status = s.online_status === 1 ? '🟢' : '🔴';
+    return `${status} ${s.name} (${s.target_ip})`;
+  });
+
+  const formPayload = {
+    type: 'custom_form',
+    title: 'Editar Servidor',
+    content: [
+      { type: 'dropdown', text: 'Selecciona un servidor para editar:', options: serverNames, default: 0 }
+    ]
+  };
+
+  client.write('modal_form_request', {
+    form_id: EDIT_SELECT_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+function sendEditServerForm(client, server) {
+  // Guardamos el ID del servidor que estamos editando
+  client._editingServerId = server.id;
+
+  const formPayload = {
+    type: 'custom_form',
+    title: `Editando: ${server.name}`,
+    content: [
+      { type: 'input', text: 'Nombre del Servidor', placeholder: 'Mi Servidor', default: server.name },
+      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: server.target_ip },
+      { type: 'input', text: 'Puerto', placeholder: '19132', default: String(server.target_port) }
+    ]
+  };
+
+  client.write('modal_form_request', {
+    form_id: EDIT_SERVER_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+function sendDeleteSelectForm(client) {
+  const servers = getAllServers();
+
+  if (servers.length === 0) {
+    sendManageMenu(client);
+    return;
+  }
+
+  // Guardamos la lista completa para mapear el índice después
+  client._allServersForManage = servers;
+
+  const serverNames = servers.map(s => {
+    const status = s.online_status === 1 ? '🟢' : '🔴';
+    return `${status} ${s.name} (${s.target_ip})`;
+  });
+
+  const formPayload = {
+    type: 'custom_form',
+    title: 'Eliminar Servidor',
+    content: [
+      { type: 'dropdown', text: 'Selecciona un servidor para eliminar:', options: serverNames, default: 0 }
+    ]
+  };
+
+  client.write('modal_form_request', {
+    form_id: DELETE_SELECT_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+function sendDeleteConfirmForm(client, server) {
+  // Guardamos el ID del servidor que vamos a eliminar
+  client._deletingServerId = server.id;
+
+  const formPayload = {
+    type: 'modal',
+    title: 'Confirmar Eliminación',
+    content: `¿Estás seguro de que quieres eliminar "${server.name}"?\n\nIP: ${server.target_ip}:${server.target_port}\n\nEsta acción no se puede deshacer.`,
+    button1: 'Sí, Eliminar',
+    button2: 'Cancelar'
+  };
+
+  client.write('modal_form_request', {
+    form_id: DELETE_CONFIRM_ID,
+    data: JSON.stringify(formPayload),
+  });
+}
+
+// ─── TAREA DE PINGS EN SEGUNDO PLANO ─────────────────────────────────────────
+
 function startBackgroundPings() {
   const PING_INTERVAL = 60000; // 1 minuto
   
@@ -68,22 +227,7 @@ function startBackgroundPings() {
   }, 1000);
 }
 
-function sendAddServerForm(client, isDirectConnect = false) {
-  const formPayload = {
-    type: 'custom_form',
-    title: isDirectConnect ? 'Conexión Directa' : 'Añadir Servidor',
-    content: [
-      { type: 'input', text: 'Nombre del Servidor (Opcional)', placeholder: 'Mi Servidor', default: '' },
-      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: '' },
-      { type: 'input', text: 'Puerto', placeholder: '19132', default: '19132' }
-    ]
-  };
-
-  client.write('modal_form_request', {
-    form_id: isDirectConnect ? DIRECT_CONNECT_ID : ADD_SERVER_ID,
-    data: JSON.stringify(formPayload),
-  });
-}
+// ─── SERVIDOR PROXY ──────────────────────────────────────────────────────────
 
 function startProxy(host, port) {
   // Arranca el servidor
@@ -246,6 +390,8 @@ function startProxy(host, port) {
         sendMainMenu(client);
       });
 
+      // ─── HANDLER DE RESPUESTAS DE FORMULARIOS ──────────────────────────
+
       client.on('modal_form_response', async (packet) => {
         try {
           if (!packet.has_response_data) {
@@ -257,13 +403,14 @@ function startProxy(host, port) {
 
           const parsedData = JSON.parse(packet.data);
 
+          // ── MENÚ PRINCIPAL ──
           if (packet.form_id === MAIN_MENU_ID) {
             const selectedIndex = Number(parsedData);
             
             if (selectedIndex === 0) {
-              sendAddServerForm(client, true); // Conexión directa
+              sendDirectConnectForm(client);
             } else if (selectedIndex === 1) {
-              sendAddServerForm(client, false); // Añadir servidor
+              sendManageMenu(client);
             } else {
               // Es un servidor de la lista (usamos la misma lista filtrada que se mostró en el menú)
               const onlineServers = client._onlineServers || [];
@@ -280,47 +427,129 @@ function startProxy(host, port) {
                 });
               }
             }
-          } else if (packet.form_id === ADD_SERVER_ID || packet.form_id === DIRECT_CONNECT_ID) {
-            // parsedData es un array con las respuestas de los inputs: [nombre, ip, puerto]
+
+          // ── MENÚ ADMINISTRAR ──
+          } else if (packet.form_id === MANAGE_MENU_ID) {
+            const selectedIndex = Number(parsedData);
+
+            if (selectedIndex === 0) {
+              sendAddServerForm(client);       // Agregar
+            } else if (selectedIndex === 1) {
+              sendEditSelectForm(client);      // Editar
+            } else if (selectedIndex === 2) {
+              sendDeleteSelectForm(client);    // Eliminar
+            } else {
+              sendMainMenu(client);            // Volver
+            }
+
+          // ── AGREGAR SERVIDOR ──
+          } else if (packet.form_id === ADD_SERVER_ID) {
             const name = parsedData[0] || 'Servidor Personalizado';
             const ip = parsedData[1];
             const port = Number(parsedData[2]) || 19132;
 
             if (!ip || ip.trim() === '') {
-              // IP inválida, regresar al menú
+              sendManageMenu(client);
+              return;
+            }
+
+            const result = addServer({ name, target_ip: ip, target_port: port });
+            console.log(`[PROXY] Servidor añadido: ${name} (${ip}:${port})`);
+
+            // Ping inmediato para que aparezca en el menú al instante
+            if (result.changes > 0) {
+              try {
+                const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
+                updateServerStatus(result.lastInsertRowid, 1, pingResult.playersOnline);
+                console.log(`[PROXY] Ping exitoso a ${name}: ${pingResult.playersOnline} jugadores`);
+              } catch (e) {
+                updateServerStatus(result.lastInsertRowid, 0, 0);
+                console.log(`[PROXY] ${name} no respondió al ping (se añadió pero aparecerá offline)`);
+              }
+            }
+
+            sendManageMenu(client);
+
+          // ── CONEXIÓN DIRECTA ──
+          } else if (packet.form_id === DIRECT_CONNECT_ID) {
+            const ip = parsedData[0];
+            const port = Number(parsedData[1]) || 19132;
+
+            if (!ip || ip.trim() === '') {
               sendMainMenu(client);
               return;
             }
 
-            if (packet.form_id === ADD_SERVER_ID) {
-              // Guardar en la base de datos
-              const result = addServer({ name, target_ip: ip, target_port: port });
-              console.log(`[PROXY] Servidor añadido: ${name} (${ip}:${port})`);
+            console.log(`[PROXY] Conexión Directa a ${ip}:${port}`);
+            client.write('transfer', {
+              server_address: ip,
+              port: port,
+              reload_world: false
+            });
 
-              // Ping inmediato: verificamos si el servidor está vivo para que aparezca en el menú al instante
-              if (result.changes > 0) {
-                try {
-                  const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
-                  updateServerStatus(result.lastInsertRowid, 1, pingResult.playersOnline);
-                  console.log(`[PROXY] Ping exitoso a ${name}: ${pingResult.playersOnline} jugadores`);
-                } catch (e) {
-                  updateServerStatus(result.lastInsertRowid, 0, 0);
-                  console.log(`[PROXY] ${name} no respondió al ping (se añadió pero aparecerá offline)`);
-                }
-              }
+          // ── EDITAR: SELECCIÓN DE SERVIDOR ──
+          } else if (packet.form_id === EDIT_SELECT_ID) {
+            const selectedIndex = parsedData[0]; // Índice del dropdown
+            const servers = client._allServersForManage || [];
 
-              // Volver al menú principal para que vea su nuevo servidor
-              sendMainMenu(client);
+            if (selectedIndex >= 0 && selectedIndex < servers.length) {
+              const server = servers[selectedIndex];
+              sendEditServerForm(client, server);
             } else {
-              // Conexión Directa
-              console.log(`[PROXY] Conexión Directa a ${ip}:${port}`);
-              client.write('transfer', {
-                server_address: ip,
-                port: port,
-                reload_world: false
-              });
+              sendManageMenu(client);
             }
+
+          // ── EDITAR: FORMULARIO DE EDICIÓN ──
+          } else if (packet.form_id === EDIT_SERVER_ID) {
+            const serverId = client._editingServerId;
+            const name = parsedData[0] || 'Servidor Personalizado';
+            const ip = parsedData[1];
+            const port = Number(parsedData[2]) || 19132;
+
+            if (!ip || ip.trim() === '' || !serverId) {
+              sendManageMenu(client);
+              return;
+            }
+
+            updateServer(serverId, { name, target_ip: ip, target_port: port });
+            console.log(`[PROXY] Servidor editado (ID ${serverId}): ${name} (${ip}:${port})`);
+
+            // Re-ping para actualizar el estado del servidor editado
+            try {
+              const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
+              updateServerStatus(serverId, 1, pingResult.playersOnline);
+            } catch (e) {
+              updateServerStatus(serverId, 0, 0);
+            }
+
+            sendManageMenu(client);
+
+          // ── ELIMINAR: SELECCIÓN DE SERVIDOR ──
+          } else if (packet.form_id === DELETE_SELECT_ID) {
+            const selectedIndex = parsedData[0]; // Índice del dropdown
+            const servers = client._allServersForManage || [];
+
+            if (selectedIndex >= 0 && selectedIndex < servers.length) {
+              const server = servers[selectedIndex];
+              sendDeleteConfirmForm(client, server);
+            } else {
+              sendManageMenu(client);
+            }
+
+          // ── ELIMINAR: CONFIRMACIÓN ──
+          } else if (packet.form_id === DELETE_CONFIRM_ID) {
+            const serverId = client._deletingServerId;
+
+            // En formularios 'modal', parsedData es true (button1) o false (button2)
+            if (parsedData === true && serverId) {
+              const server = getServerById(serverId);
+              deleteServer(serverId);
+              console.log(`[PROXY] Servidor eliminado (ID ${serverId}): ${server?.name || 'desconocido'}`);
+            }
+
+            sendManageMenu(client);
           }
+
         } catch (error) {
           console.error('[PROXY] Error en formulario:', error);
         }
