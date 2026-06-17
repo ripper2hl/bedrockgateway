@@ -61,10 +61,31 @@ docker run -d \
   --name bedrockgateway \
   --restart unless-stopped \
   -e HOST_IP=$(hostname -I | awk '{print $1}') \
+  -v bedrockgateway-data:/app/database \
   -p 53:53/udp \
   -p 19132:19132/udp \
   -p 3000:3000/tcp \
   bedrockgateway
+```
+
+> **💾 Persistencia de datos:** La opción `-v bedrockgateway-data:/app/database` crea un **volumen de Docker** que almacena la base de datos SQLite fuera del contenedor. Esto significa que puedes borrar y recrear el contenedor sin perder tus servidores registrados. El volumen persiste hasta que lo elimines manualmente con `docker volume rm bedrockgateway-data`.
+
+### Registrar tu servidor de Minecraft
+
+Una vez que el contenedor esté corriendo, puedes agregar tu servidor con un simple `curl`:
+
+```bash
+curl -X POST http://localhost:3000/api/servers \
+     -H "Content-Type: application/json" \
+     -d '{ "name": "Perales", "target_ip": "192.168.3.84", "target_port": 19133 }'
+```
+
+O si prefieres importar desde el archivo `servidores.json` incluido en el proyecto:
+
+```bash
+curl -X POST http://localhost:3000/api/servers/import \
+     -H "Content-Type: application/json" \
+     -d '{"file": "./servidores.json"}'
 ```
 
 ---
