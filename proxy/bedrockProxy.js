@@ -3,6 +3,41 @@ const { ServerAdvertisement } = require('bedrock-protocol');
 const { getAllServers, addServer, getServerById, updateServer, deleteServer, updateServerStatus } = require('../database/sqliteConfig');
 const dummyPackets = require('./dummyPackets');
 
+// ─── AUTO-DETECCIÓN DE VERSIÓN ───────────────────────────────────────────────
+//
+// bedrock-protocol define una CURRENT_VERSION (ej: '1.26.20') que puede estar
+// adelantada respecto a minecraft-data. Cuando eso pasa, el proxy crashea.
+//
+// Esta función resuelve la mejor versión disponible automáticamente:
+//   1. Si CURRENT_VERSION existe en minecraft-data → la usa (caso ideal)
+//   2. Si NO existe → usa la más reciente que SÍ esté disponible (fallback)
+//
+// Esto hace que el proxy sobreviva a actualizaciones menores de Minecraft
+// sin necesidad de actualizar dependencias inmediatamente.
+
+function resolveBestVersion() {
+  const { CURRENT_VERSION, Versions } = require('bedrock-protocol/src/options');
+
+  // Caso ideal: la versión que bedrock-protocol quiere usar está disponible
+  if (Versions[CURRENT_VERSION]) {
+    console.log(`[PROXY] 📋 Versión del protocolo: ${CURRENT_VERSION} (protocolo ${Versions[CURRENT_VERSION]})`);
+    return CURRENT_VERSION;
+  }
+
+  // Fallback: la versión no está en minecraft-data, usar la más reciente disponible
+  const sorted = Object.entries(Versions).sort(([, a], [, b]) => b - a);
+
+  if (sorted.length === 0) {
+    throw new Error('[PROXY] No hay versiones de Bedrock disponibles en minecraft-data');
+  }
+
+  const [latestVersion, latestProtocol] = sorted[0];
+  console.warn(`[PROXY] ⚠️ Versión ${CURRENT_VERSION} no disponible en minecraft-data.`);
+  console.warn(`[PROXY] 🔄 Usando ${latestVersion} (protocolo ${latestProtocol}) como fallback.`);
+  console.warn(`[PROXY] 💡 Para soporte completo, ejecuta: npm update`);
+  return latestVersion;
+}
+
 // IDs de formularios
 const MAIN_MENU_ID = 1000;
 const ADD_SERVER_ID = 1001;
@@ -230,10 +265,14 @@ function startBackgroundPings() {
 // ─── SERVIDOR PROXY ──────────────────────────────────────────────────────────
 
 function startProxy(host, port) {
+  // Resolver la mejor versión disponible antes de arrancar
+  const resolvedVersion = resolveBestVersion();
+
   // Arranca el servidor
   const server = bedrock.createServer({
     host: host,
     port: port,
+    version: resolvedVersion,
     offline: true, // Vital para no pedir verificación extra a Xbox Live
     motd: {
       motd: "BedrockGateway",

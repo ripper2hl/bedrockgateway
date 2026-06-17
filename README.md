@@ -49,7 +49,7 @@ Si prefieres usar contenedores, BedrockGateway está completamente listo para Do
 
 ### Construir la imagen
 ```bash
-docker build -t bedrock-gateway .
+docker build -t bedrockgateway .
 ```
 
 ### Ejecutar el contenedor
@@ -58,13 +58,13 @@ Puedes escribirla manualmente (ej. `-e HOST_IP=192.168.1.100`), o si estás en L
 
 ```bash
 docker run -d \
-  --name bedrock-gateway \
+  --name bedrockgateway \
   --restart unless-stopped \
   -e HOST_IP=$(hostname -I | awk '{print $1}') \
   -p 53:53/udp \
   -p 19132:19132/udp \
   -p 3000:3000/tcp \
-  bedrock-gateway
+  bedrockgateway
 ```
 
 ---
