@@ -1,4 +1,4 @@
-name: CI/CD — Test & Publish Docker Image
+name: CI/CD
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
       - main
 
 jobs:
-  # ─── JOB 1: Suite de pruebas ─────────────────────────────────────────────────
   test:
     name: Run Test Suite
     runs-on: ubuntu-latest
