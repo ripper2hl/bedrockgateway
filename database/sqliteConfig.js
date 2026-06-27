@@ -138,6 +138,71 @@ function deleteServer(id) {
   return db.prepare('DELETE FROM custom_servers WHERE id = ?').run(id);
 }
 
+// ─── FACTORY PARA TESTING ────────────────────────────────────────────────────
+
+/**
+ * Crea una instancia aislada de la base de datos con todas las funciones CRUD.
+ * Úsala en tests con ':memory:' para no tocar la BD de producción.
+ *
+ * @param {string} customDbPath  Ruta al archivo SQLite o ':memory:'
+ * @returns {{ initDb, addServer, getAllServers, getServerById, updateServer, deleteServer, updateServerStatus }}
+ */
+function createDb(customDbPath) {
+  const instance = new Database(customDbPath);
+
+  function initDb() {
+    instance.prepare(`
+      CREATE TABLE IF NOT EXISTS custom_servers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        target_ip TEXT NOT NULL,
+        target_port INTEGER NOT NULL,
+        online_status INTEGER DEFAULT 0,
+        players_online INTEGER DEFAULT 0
+      )
+    `).run();
+  }
+
+  function addServer(serverObj) {
+    const check = instance.prepare(
+      'SELECT id FROM custom_servers WHERE target_ip = ? AND target_port = ?'
+    ).get(serverObj.target_ip, serverObj.target_port);
+    if (check) return { changes: 0, lastInsertRowid: check.id };
+
+    return instance.prepare(
+      'INSERT INTO custom_servers (name, target_ip, target_port) VALUES (@name, @target_ip, @target_port)'
+    ).run(serverObj);
+  }
+
+  function getAllServers() {
+    return instance.prepare(
+      'SELECT id, name, target_ip, target_port, online_status, players_online FROM custom_servers ORDER BY id DESC'
+    ).all();
+  }
+
+  function getServerById(id) {
+    return instance.prepare('SELECT * FROM custom_servers WHERE id = ?').get(id);
+  }
+
+  function updateServer(id, serverObj) {
+    return instance.prepare(
+      'UPDATE custom_servers SET name = @name, target_ip = @target_ip, target_port = @target_port WHERE id = @id'
+    ).run({ id, ...serverObj });
+  }
+
+  function deleteServer(id) {
+    return instance.prepare('DELETE FROM custom_servers WHERE id = ?').run(id);
+  }
+
+  function updateServerStatus(id, online_status, players_online) {
+    return instance.prepare(
+      'UPDATE custom_servers SET online_status = @online_status, players_online = @players_online WHERE id = @id'
+    ).run({ id, online_status, players_online });
+  }
+
+  return { initDb, addServer, getAllServers, getServerById, updateServer, deleteServer, updateServerStatus };
+}
+
 module.exports = {
   initDb,
   addServer,
@@ -146,4 +211,5 @@ module.exports = {
   updateServer,
   deleteServer,
   updateServerStatus,
+  createDb,
 };
