@@ -22,11 +22,11 @@ function sendMainMenu(client) {
 
   const buttons = [
     { text: "Conexión Directa\n(Escribir IP)" },
-    { text: "Administrar Servidores\n⚙️ Agregar, Editar, Eliminar" }
+    { text: "Administrar Servidores\n\u2699\uFE0F Agregar, Editar, Eliminar" }
   ];
 
   for (const server of onlineServers) {
-    buttons.push({ text: `${server.name}\n🟢 ${server.players_online} Jugadores` });
+    buttons.push({ text: `${server.name}\n\u25CF ${server.players_online} Jugadores` });
   }
 
   // Guardamos la lista filtrada en el cliente para que la respuesta del formulario
@@ -52,10 +52,10 @@ function sendManageMenu(client) {
     title: 'Administrar Servidores',
     content: 'Selecciona una acción:',
     buttons: [
-      { text: "➕ Agregar Servidor" },
-      { text: "✏️ Editar Servidor" },
-      { text: "🗑️ Eliminar Servidor" },
-      { text: "⬅️ Volver al Menú" }
+      { text: "\u2795 Agregar Servidor" },
+      { text: "\u270F\uFE0F Editar Servidor" },
+      { text: "\u2716 Eliminar Servidor" },
+      { text: "\u2B05\uFE0F Volver al Men\u00FA" }
     ],
   };
 
@@ -110,7 +110,7 @@ function sendEditSelectForm(client) {
   client._allServersForManage = servers;
 
   const serverNames = servers.map(s => {
-    const status = s.online_status === 1 ? '🟢' : '🔴';
+    const status = s.online_status === 1 ? '\u25CF' : '\u25CB'; // ● online, ○ offline (BMP-safe)
     return `${status} ${s.name} (${s.target_ip})`;
   });
 
@@ -160,7 +160,7 @@ function sendDeleteSelectForm(client) {
   client._allServersForManage = servers;
 
   const serverNames = servers.map(s => {
-    const status = s.online_status === 1 ? '🟢' : '🔴';
+    const status = s.online_status === 1 ? '\u25CF' : '\u25CB'; // ● online, ○ offline (BMP-safe)
     return `${status} ${s.name} (${s.target_ip})`;
   });
 

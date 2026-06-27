@@ -1,5 +1,10 @@
 FROM node:24-slim
 
+# Garantiza codificación UTF-8 en el entorno del contenedor
+ENV LANG=C.UTF-8
+ENV LANGUAGE=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
 # Crea el directorio de trabajo dentro del contenedor
 WORKDIR /app
 
