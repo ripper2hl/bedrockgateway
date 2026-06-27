@@ -30,11 +30,15 @@ function startApi(port) {
   // Rutas
   app.use('/api/servers', serversRouter);
 
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`[API] ✅ REST API escuchando en el puerto ${port}`);
     console.log(`[API] 📚 Swagger UI disponible en http://localhost:${port}/api-docs`);
   });
+
+  // Retornamos ambos para que los tests puedan cerrar el socket
+  return { app, server };
 }
+
 
 module.exports = {
   startApi,
