@@ -3,81 +3,6 @@ const { ServerAdvertisement } = require('bedrock-protocol');
 const { getAllServers, addServer, getServerById, updateServer, deleteServer, updateServerStatus } = require('../database/sqliteConfig');
 const dummyPackets = require('./dummyPackets');
 
-// Estado global de orden de servidores por cliente
-// 'desc' = más recientes primero, 'asc' = más antiguos primero
-const clientSortOrder = new Map();
-
-// ─── AUTO-DETECCIÓN DE VERSIÓN ───────────────────────────────────────────────
-//
-// bedrock-protocol define una CURRENT_VERSION (ej: '1.26.20') que frecuentemente
-// queda atrasada cuando Mojang publica actualizaciones menores (1.26.30, etc).
-//
-// Cuando la consola (Switch) se actualiza, rechaza conectarse a servidores que
-// anuncien un protocolo más viejo.
-//
-// La estrategia es:
-//   1. Usar la versión más alta que minecraft-data SOPORTE para serialización
-//      (necesitamos sus datos de paquetes reales).
-//   2. Parchear el ServerAdvertisement para anunciar el protocolo más alto
-//      conocido, que puede ser inyectado manualmente.
-//
-// La estructura de paquetes entre versiones menores (1.26.x) es idéntica,
-// así que la serialización de 1.26.20 funciona perfectamente para 1.26.30.
-
-// Versiones conocidas que bedrock-protocol/minecraft-data aún no soportan.
-// Cuando se publique un update oficial, estas entradas se ignoran automáticamente.
-// Formato: { 'version': protocolNumber }
-// Fuente: https://minecraft.wiki/w/Protocol_version#Bedrock_Edition_2
-const VERSION_OVERRIDES = {
-  // Este override sólo se usa cuando minecraft-data aún no conoce la versión.
-  // 1.26.30 es la versión del cliente; el servidor internamente serializa con 1.26.20.
-  '1.26.30': 1001,
-};
-
-function compareVersionStrings(a, b) {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
-    if (na !== nb) return na - nb;
-  }
-  return 0;
-}
-
-function resolveBestVersion() {
-  const Options = require('bedrock-protocol/src/options');
-  const { Versions } = Options;
-
-  const sorted = Object.entries(Versions).sort(([, a], [, b]) => b - a);
-
-  if (sorted.length === 0) {
-    throw new Error('[PROXY] No hay versiones de Bedrock disponibles en minecraft-data');
-  }
-
-  const [serializationVersion, serializationProtocol] = sorted[0];
-
-  let bestVersion = serializationVersion;
-  let bestProtocol = serializationProtocol;
-
-  for (const [ver, proto] of Object.entries(VERSION_OVERRIDES)) {
-    if (compareVersionStrings(ver, bestVersion) > 0) {
-      bestVersion = ver;
-      bestProtocol = proto;
-    }
-  }
-
-  if (bestVersion !== serializationVersion) {
-    Versions[bestVersion] = bestProtocol;
-    console.log(`[PROXY] Version ${bestVersion} (protocolo ${bestProtocol}) inyectada.`);
-    console.log(`[PROXY] Serializacion basada en ${serializationVersion} (protocolo ${serializationProtocol}).`);
-  } else {
-    console.log(`[PROXY] Version del protocolo: ${bestVersion} (protocolo ${bestProtocol})`);
-  }
-
-  return { serializationVersion, bestVersion, bestProtocol };
-}
-
 // IDs de formularios
 const MAIN_MENU_ID = 1000;
 const ADD_SERVER_ID = 1001;
@@ -87,7 +12,6 @@ const EDIT_SELECT_ID = 1004;
 const EDIT_SERVER_ID = 1005;
 const DELETE_SELECT_ID = 1006;
 const DELETE_CONFIRM_ID = 1007;
-const SORT_ORDER_ID = 1008;
 
 // ─── FORMULARIOS DE UI ───────────────────────────────────────────────────────
 
@@ -96,24 +20,13 @@ function sendMainMenu(client) {
   // Filtrar solo los servidores online para el menú
   const onlineServers = allServers.filter(s => s.online_status === 1);
 
-  // Ordenar servidores según la preferencia del cliente
-  const clientKey = client.address?.address || 'default';
-  const sortOrder = clientSortOrder.get(clientKey) || 'desc'; // Default: recientes primero
-  const sortLabel = sortOrder === 'desc' ? 'Recientes primero' : 'Antiguos primero';
-  const nextSortLabel = sortOrder === 'desc' ? 'Antiguos primero' : 'Recientes primero';
-
-  onlineServers.sort((a, b) => {
-    return sortOrder === 'desc' ? b.id - a.id : a.id - b.id;
-  });
-
   const buttons = [
-    { text: "Conexion Directa\n(Escribir IP)" },
-    { text: "Administrar Servidores\nAgregar, Editar, Eliminar" },
-    { text: `Orden: ${sortLabel}\nCambiar a: ${nextSortLabel}` }
+    { text: "Conexión Directa\n(Escribir IP)" },
+    { text: "Administrar Servidores\n⚙️ Agregar, Editar, Eliminar" }
   ];
 
   for (const server of onlineServers) {
-    buttons.push({ text: `${server.name}\n[EN LINEA] ${server.players_online} Jugadores` });
+    buttons.push({ text: `${server.name}\n🟢 ${server.players_online} Jugadores` });
   }
 
   // Guardamos la lista filtrada en el cliente para que la respuesta del formulario
@@ -123,7 +36,7 @@ function sendMainMenu(client) {
   const formPayload = {
     type: 'form',
     title: 'BedrockGateway',
-    content: 'Selecciona una opcion o un servidor:',
+    content: 'Selecciona una opción o un servidor:',
     buttons,
   };
 
@@ -137,12 +50,12 @@ function sendManageMenu(client) {
   const formPayload = {
     type: 'form',
     title: 'Administrar Servidores',
-    content: 'Selecciona una accion:',
+    content: 'Selecciona una acción:',
     buttons: [
-      { text: "[+] Agregar Servidor" },
-      { text: "[E] Editar Servidor" },
-      { text: "[X] Eliminar Servidor" },
-      { text: "[<] Volver al Menu" }
+      { text: "➕ Agregar Servidor" },
+      { text: "✏️ Editar Servidor" },
+      { text: "🗑️ Eliminar Servidor" },
+      { text: "⬅️ Volver al Menú" }
     ],
   };
 
@@ -155,10 +68,10 @@ function sendManageMenu(client) {
 function sendAddServerForm(client) {
   const formPayload = {
     type: 'custom_form',
-    title: 'Agregar Servidor',
+    title: 'Añadir Servidor',
     content: [
       { type: 'input', text: 'Nombre del Servidor', placeholder: 'Mi Servidor', default: '' },
-      { type: 'input', text: 'Direccion IP', placeholder: 'play.ejemplo.com', default: '' },
+      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: '' },
       { type: 'input', text: 'Puerto', placeholder: '19132', default: '19132' }
     ]
   };
@@ -172,9 +85,9 @@ function sendAddServerForm(client) {
 function sendDirectConnectForm(client) {
   const formPayload = {
     type: 'custom_form',
-    title: 'Conexion Directa',
+    title: 'Conexión Directa',
     content: [
-      { type: 'input', text: 'Direccion IP', placeholder: 'play.ejemplo.com', default: '' },
+      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: '' },
       { type: 'input', text: 'Puerto', placeholder: '19132', default: '19132' }
     ]
   };
@@ -197,7 +110,7 @@ function sendEditSelectForm(client) {
   client._allServersForManage = servers;
 
   const serverNames = servers.map(s => {
-    const status = s.online_status === 1 ? '[ON]' : '[OFF]';
+    const status = s.online_status === 1 ? '🟢' : '🔴';
     return `${status} ${s.name} (${s.target_ip})`;
   });
 
@@ -224,7 +137,7 @@ function sendEditServerForm(client, server) {
     title: `Editando: ${server.name}`,
     content: [
       { type: 'input', text: 'Nombre del Servidor', placeholder: 'Mi Servidor', default: server.name },
-      { type: 'input', text: 'Direccion IP', placeholder: 'play.ejemplo.com', default: server.target_ip },
+      { type: 'input', text: 'Dirección IP', placeholder: 'play.ejemplo.com', default: server.target_ip },
       { type: 'input', text: 'Puerto', placeholder: '19132', default: String(server.target_port) }
     ]
   };
@@ -271,9 +184,9 @@ function sendDeleteConfirmForm(client, server) {
 
   const formPayload = {
     type: 'modal',
-    title: 'Confirmar Eliminacion',
-    content: `Estas seguro de que quieres eliminar "${server.name}"?\n\nIP: ${server.target_ip}:${server.target_port}\n\nEsta accion no se puede deshacer.`,
-    button1: 'Si, Eliminar',
+    title: 'Confirmar Eliminación',
+    content: `¿Estás seguro de que quieres eliminar "${server.name}"?\n\nIP: ${server.target_ip}:${server.target_port}\n\nEsta acción no se puede deshacer.`,
+    button1: 'Sí, Eliminar',
     button2: 'Cancelar'
   };
 
@@ -287,7 +200,7 @@ function sendDeleteConfirmForm(client, server) {
 
 function startBackgroundPings() {
   const PING_INTERVAL = 60000; // 1 minuto
-  
+
   setInterval(async () => {
     const servers = getAllServers();
     for (const server of servers) {
@@ -317,14 +230,11 @@ function startBackgroundPings() {
 // ─── SERVIDOR PROXY ──────────────────────────────────────────────────────────
 
 function startProxy(host, port) {
-  const { serializationVersion, bestVersion, bestProtocol } = resolveBestVersion();
-
-  // Arranca el servidor con la versión que minecraft-data SÍ conoce (ej: 1.26.20)
+  // Arranca el servidor
   const server = bedrock.createServer({
     host: host,
     port: port,
-    version: serializationVersion,
-    offline: true,
+    offline: true, // Vital para no pedir verificación extra a Xbox Live
     motd: {
       motd: "BedrockGateway",
       levelId: "BedrockGateway"
@@ -332,74 +242,85 @@ function startProxy(host, port) {
     maxPlayers: 10
   });
 
-  // Si hay un override de versión (como 1.26.30), parcheamos el server
-  if (bestVersion !== serializationVersion) {
-    server.advertisement.version = bestVersion;
-    server.advertisement.protocol = bestProtocol;
-    server.options.advertisementFn = () => server.advertisement;
+  console.log(`[PROXY] ✅ Bedrock Proxy vivo y escuchando en el puerto ${port}`);
 
-    // 🔥 EL TRUCO MAESTRO: cambiar la variable interna que valida el handshake
-    server.options.protocolVersion = bestProtocol;
-
-    console.log(`[PROXY] Advertisement y Protocolo interno parcheados: ${bestVersion} (${bestProtocol})`);
-  }
-
-  console.log(`[PROXY] Bedrock Proxy vivo y escuchando en el puerto ${port}`);
+  // Iniciar tarea de ping en segundo plano
   startBackgroundPings();
 
   server.on('connect', (client) => {
     console.log('🔥 CONEXIÓN RAW');
     console.log('[PROXY] Jugador conectado desde:', client.address?.address || 'desconocido');
 
-    // Volvemos al bypass simple y confiable: forzar handshake -> login_success -> join
+    // 🔥 PARCHE V5 (CORREGIDO): Bypass de Encriptación eliminando el listener nativo
+    // Evitamos que 'bedrock-protocol' intente encriptar (ya que no somos Mojang y la consola nos rechazaría).
     client.removeAllListeners('server.client_handshake');
     client.on('server.client_handshake', () => {
-      console.log('[PROXY] 🛡️ Handshake completado, enviando login_success');
+      console.log('[PROXY] 🛡️ Saltando encriptación y enviando login_success directo (Estilo BedrockConnect)');
       client.write('play_status', { status: 'login_success' });
       client.status = 3; // ClientStatus.Initializing
       client.emit('join');
     });
 
     // 🔥 PATCH DEFINITIVO V4: Bypass de validación JWT para Switch/Consolas
+    // Al estar en offline mode, no necesitamos validar firmas. Extraemos la data directamente
+    // evitando crasheos (Unexpected end of JSON input) si la consola manda un JWT o cadena vacía.
     client.decodeLoginJWT = function (authTokens, skinTokens, authToken = '') {
       let finalKey = null;
       let data = {};
 
+      // 1. Extraer data del chain
       if (Array.isArray(authTokens)) {
         for (const token of authTokens) {
           if (!token || typeof token !== 'string') continue;
           const parts = token.split('.');
           if (parts.length !== 3) continue;
+
           try {
-            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
-            if (payload.identityPublicKey) finalKey = payload.identityPublicKey;
+            const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
+            const payload = JSON.parse(payloadStr);
+            if (payload.identityPublicKey) {
+              finalKey = payload.identityPublicKey;
+            }
             data = { ...data, ...payload };
-          } catch (e) {}
+          } catch (e) {
+            // Ignoramos tokens inválidos
+          }
         }
       }
 
+      // 2. Extraer data del authToken si existe
       if (authToken && typeof authToken === 'string') {
         const parts = authToken.split('.');
         if (parts.length === 3) {
           try {
-            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+            const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
+            const payload = JSON.parse(payloadStr);
             data = { ...data, ...payload };
-            if (payload.identityPublicKey) finalKey = payload.identityPublicKey;
-          } catch (e) {}
+            if (payload.identityPublicKey) {
+              finalKey = payload.identityPublicKey; // El token principal tiene prioridad
+            }
+          } catch (e) { }
         }
       }
 
+      // 3. Extraer data del skin
       let skinData = {};
       if (skinTokens && typeof skinTokens === 'string') {
         const parts = skinTokens.split('.');
         if (parts.length === 3) {
           try {
-            skinData = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
-          } catch (e) {}
+            const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
+            skinData = JSON.parse(payloadStr);
+          } catch (e) { }
         }
       }
 
-      if (!finalKey) console.warn('[PROXY] ⚠️ No se encontró identityPublicKey.');
+      // 4. Fallback si no hay llave pública (para que no crashee la encriptación)
+      // Aunque en clientes reales de Bedrock siempre vendrá una llave.
+      if (!finalKey) {
+        console.warn('[PROXY] ⚠️ No se encontró identityPublicKey en los tokens. La encriptación podría fallar.');
+      }
+
       return { key: finalKey, userData: data, skinData };
     };
 
@@ -410,51 +331,229 @@ function startProxy(host, port) {
     client.on('join', () => {
       console.log('[PROXY] Enviando resource_packs_info...');
 
+      // Avanzamos el estado de carga
       client.write('resource_packs_info', {
-        must_accept: false, has_addons: false, has_scripts: false, force_server_packs: false,
-        behavior_packs: [], texture_packs: [],
-        world_template: { uuid: '00000000-0000-0000-0000-000000000000', version: '*' }
+        must_accept: false,
+        has_addons: false,
+        has_scripts: false,
+        disable_vibrant_visuals: false,
+        force_server_packs: false,
+        behavior_packs: [],
+        texture_packs: [],
+        world_template: {
+          uuid: '00000000-0000-0000-0000-000000000000',
+          version: '*'
+        }
       });
 
       client.on('resource_pack_client_response', (packet) => {
         if (packet.response_status === 'have_all_packs') {
           console.log('[PROXY] Cliente tiene los packs, enviando resource_pack_stack...');
           client.write('resource_pack_stack', {
-            must_accept: false, behavior_packs: [], resource_packs: [],
-            game_version: '*', experiments: [], experiments_previously_used: false
+            must_accept: false,
+            behavior_packs: [],
+            resource_packs: [],
+            game_version: '*',
+            experiments: [],
+            experiments_previously_used: false
           });
         } else if (packet.response_status === 'completed') {
-          console.log('[PROXY] Cliente completo carga de packs. Generando mundo dummy...');
+          console.log('[PROXY] Cliente completó carga de packs. Generando mundo dummy...');
+
+          // 1. Enviamos el StartGamePacket para que deje la pantalla de carga
           try {
             client.write('start_game', dummyPackets.startGame);
+          } catch (e) {
+            console.error('[PROXY] Error enviando start_game:', e.message);
+          }
+
+          // 2. Enviamos el CreativeContent y BiomeDefinitionList (necesarios)
+          try {
             client.write('creative_content', dummyPackets.creativeContent);
             client.write('biome_definition_list', dummyPackets.biomeDefinitionList);
-
-            const emptyChunk = dummyPackets.emptyLevelChunk;
-            const RADIUS = 4;
-            for (let x = -RADIUS; x <= RADIUS; x++) {
-              for (let z = -RADIUS; z <= RADIUS; z++) {
-                client.write('level_chunk', { x: x, z: z, ...emptyChunk });
-              }
-            }
-            console.log(`[PROXY] ${(RADIUS * 2 + 1) ** 2} chunks vacios enviados.`);
             client.write('play_status', { status: 'player_spawn' });
-          } catch(e) {
-            console.error('[PROXY] Error enviando paquetes iniciales:', e.message);
+          } catch (e) {
+            console.error('[PROXY] Error enviando paquetes adicionales:', e.message);
           }
+
+          console.log('[PROXY] Paquetes de inicialización enviados. Esperando respuesta del cliente...');
         }
       });
 
+      // El cliente pide el radio de chunks que puede ver
       client.on('request_chunk_radius', (packet) => {
-        client.write('chunk_radius_update', { chunk_radius: Math.min(packet.chunk_radius, 4) });
+        client.write('chunk_radius_update', { chunk_radius: packet.chunk_radius });
       });
 
-      client.on('set_local_player_as_initialized', () => {
+      client.on('set_local_player_as_initialized', (packet) => {
         console.log('[PROXY] Cliente Spawned! Enviando menú principal...');
         sendMainMenu(client);
       });
 
-      // El manejador de formularios (`modal_form_response`) permanece abajo sin cambios
+      // ─── HANDLER DE RESPUESTAS DE FORMULARIOS ──────────────────────────
+
+      client.on('modal_form_response', async (packet) => {
+        try {
+          if (!packet.has_response_data) {
+            // El usuario cerró el formulario (presionó B o la X)
+            // Le volvemos a mandar el menú principal para que no se quede atrapado
+            sendMainMenu(client);
+            return;
+          }
+
+          const parsedData = JSON.parse(packet.data);
+
+          // ── MENÚ PRINCIPAL ──
+          if (packet.form_id === MAIN_MENU_ID) {
+            const selectedIndex = Number(parsedData);
+
+            if (selectedIndex === 0) {
+              sendDirectConnectForm(client);
+            } else if (selectedIndex === 1) {
+              sendManageMenu(client);
+            } else {
+              // Es un servidor de la lista (usamos la misma lista filtrada que se mostró en el menú)
+              const onlineServers = client._onlineServers || [];
+              const serverIndex = selectedIndex - 2; // Descontamos los 2 primeros botones
+
+              if (serverIndex >= 0 && serverIndex < onlineServers.length) {
+                const selectedServer = onlineServers[serverIndex];
+                console.log(`[PROXY] Transfiriendo a ${selectedServer.name} -> ${selectedServer.target_ip}:${selectedServer.target_port}`);
+
+                client.write('transfer', {
+                  server_address: selectedServer.target_ip,
+                  port: Number(selectedServer.target_port),
+                  reload_world: false
+                });
+              }
+            }
+
+            // ── MENÚ ADMINISTRAR ──
+          } else if (packet.form_id === MANAGE_MENU_ID) {
+            const selectedIndex = Number(parsedData);
+
+            if (selectedIndex === 0) {
+              sendAddServerForm(client);       // Agregar
+            } else if (selectedIndex === 1) {
+              sendEditSelectForm(client);      // Editar
+            } else if (selectedIndex === 2) {
+              sendDeleteSelectForm(client);    // Eliminar
+            } else {
+              sendMainMenu(client);            // Volver
+            }
+
+            // ── AGREGAR SERVIDOR ──
+          } else if (packet.form_id === ADD_SERVER_ID) {
+            const name = parsedData[0] || 'Servidor Personalizado';
+            const ip = parsedData[1];
+            const port = Number(parsedData[2]) || 19132;
+
+            if (!ip || ip.trim() === '') {
+              sendManageMenu(client);
+              return;
+            }
+
+            const result = addServer({ name, target_ip: ip, target_port: port });
+            console.log(`[PROXY] Servidor añadido: ${name} (${ip}:${port})`);
+
+            // Ping inmediato para que aparezca en el menú al instante
+            if (result.changes > 0) {
+              try {
+                const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
+                updateServerStatus(result.lastInsertRowid, 1, pingResult.playersOnline);
+                console.log(`[PROXY] Ping exitoso a ${name}: ${pingResult.playersOnline} jugadores`);
+              } catch (e) {
+                updateServerStatus(result.lastInsertRowid, 0, 0);
+                console.log(`[PROXY] ${name} no respondió al ping (se añadió pero aparecerá offline)`);
+              }
+            }
+
+            sendManageMenu(client);
+
+            // ── CONEXIÓN DIRECTA ──
+          } else if (packet.form_id === DIRECT_CONNECT_ID) {
+            const ip = parsedData[0];
+            const port = Number(parsedData[1]) || 19132;
+
+            if (!ip || ip.trim() === '') {
+              sendMainMenu(client);
+              return;
+            }
+
+            console.log(`[PROXY] Conexión Directa a ${ip}:${port}`);
+            client.write('transfer', {
+              server_address: ip,
+              port: port,
+              reload_world: false
+            });
+
+            // ── EDITAR: SELECCIÓN DE SERVIDOR ──
+          } else if (packet.form_id === EDIT_SELECT_ID) {
+            const selectedIndex = parsedData[0]; // Índice del dropdown
+            const servers = client._allServersForManage || [];
+
+            if (selectedIndex >= 0 && selectedIndex < servers.length) {
+              const server = servers[selectedIndex];
+              sendEditServerForm(client, server);
+            } else {
+              sendManageMenu(client);
+            }
+
+            // ── EDITAR: FORMULARIO DE EDICIÓN ──
+          } else if (packet.form_id === EDIT_SERVER_ID) {
+            const serverId = client._editingServerId;
+            const name = parsedData[0] || 'Servidor Personalizado';
+            const ip = parsedData[1];
+            const port = Number(parsedData[2]) || 19132;
+
+            if (!ip || ip.trim() === '' || !serverId) {
+              sendManageMenu(client);
+              return;
+            }
+
+            updateServer(serverId, { name, target_ip: ip, target_port: port });
+            console.log(`[PROXY] Servidor editado (ID ${serverId}): ${name} (${ip}:${port})`);
+
+            // Re-ping para actualizar el estado del servidor editado
+            try {
+              const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
+              updateServerStatus(serverId, 1, pingResult.playersOnline);
+            } catch (e) {
+              updateServerStatus(serverId, 0, 0);
+            }
+
+            sendManageMenu(client);
+
+            // ── ELIMINAR: SELECCIÓN DE SERVIDOR ──
+          } else if (packet.form_id === DELETE_SELECT_ID) {
+            const selectedIndex = parsedData[0]; // Índice del dropdown
+            const servers = client._allServersForManage || [];
+
+            if (selectedIndex >= 0 && selectedIndex < servers.length) {
+              const server = servers[selectedIndex];
+              sendDeleteConfirmForm(client, server);
+            } else {
+              sendManageMenu(client);
+            }
+
+            // ── ELIMINAR: CONFIRMACIÓN ──
+          } else if (packet.form_id === DELETE_CONFIRM_ID) {
+            const serverId = client._deletingServerId;
+
+            // En formularios 'modal', parsedData es true (button1) o false (button2)
+            if (parsedData === true && serverId) {
+              const server = getServerById(serverId);
+              deleteServer(serverId);
+              console.log(`[PROXY] Servidor eliminado (ID ${serverId}): ${server?.name || 'desconocido'}`);
+            }
+
+            sendManageMenu(client);
+          }
+
+        } catch (error) {
+          console.error('[PROXY] Error en formulario:', error);
+        }
+      });
     });
   });
 
