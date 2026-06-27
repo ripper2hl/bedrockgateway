@@ -84,6 +84,7 @@ function getAllServers() {
   const select = db.prepare(`
     SELECT id, name, target_ip, target_port, online_status, players_online
     FROM custom_servers
+    ORDER BY id DESC
   `);
 
   return select.all();
