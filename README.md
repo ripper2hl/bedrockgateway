@@ -2,7 +2,7 @@
 
 [![Docker Hub](https://img.shields.io/docker/v/jesusperales/bedrockgateway?logo=docker&label=Docker%20Hub&color=2496ED)](https://hub.docker.com/r/jesusperales/bedrockgateway)
 [![Docker Pulls](https://img.shields.io/docker/pulls/jesusperales/bedrockgateway?logo=docker&color=2496ED)](https://hub.docker.com/r/jesusperales/bedrockgateway)
-[![CI/CD](https://github.com/jesusperales/bedrockgateway/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/jesusperales/bedrockgateway/actions/workflows/docker-publish.yml)
+[![CI/CD](https://github.com/ripper2hl/bedrockgateway/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ripper2hl/bedrockgateway/actions/workflows/docker-publish.yml)
 
 BedrockGateway es un servidor proxy DNS + Minecraft Bedrock construido 100% en Node.js. 
 Actúa como una alternativa moderna y altamente optimizada a herramientas como BedrockConnect, permitiendo a los jugadores de consolas (Nintendo Switch, Xbox, PlayStation) conectarse a cualquier servidor externo (Custom Servers) saltándose las restricciones de Mojang.
