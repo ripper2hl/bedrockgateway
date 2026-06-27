@@ -1,5 +1,9 @@
 # BedrockGateway
 
+[![Docker Hub](https://img.shields.io/docker/v/jesusperales/bedrockgateway?logo=docker&label=Docker%20Hub&color=2496ED)](https://hub.docker.com/r/jesusperales/bedrockgateway)
+[![Docker Pulls](https://img.shields.io/docker/pulls/jesusperales/bedrockgateway?logo=docker&color=2496ED)](https://hub.docker.com/r/jesusperales/bedrockgateway)
+[![CI/CD](https://github.com/jesusperales/bedrockgateway/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/jesusperales/bedrockgateway/actions/workflows/docker-publish.yml)
+
 BedrockGateway es un servidor proxy DNS + Minecraft Bedrock construido 100% en Node.js. 
 Actúa como una alternativa moderna y altamente optimizada a herramientas como BedrockConnect, permitiendo a los jugadores de consolas (Nintendo Switch, Xbox, PlayStation) conectarse a cualquier servidor externo (Custom Servers) saltándose las restricciones de Mojang.
 
@@ -87,6 +91,62 @@ curl -X POST http://localhost:3000/api/servers/import \
      -H "Content-Type: application/json" \
      -d '{"file": "./servidores.json"}'
 ```
+
+---
+
+## 🐳 Despliegue con Docker
+
+La forma más rápida de poner en marcha BedrockGateway es usando la imagen oficial publicada en Docker Hub. No necesitas compilar nada.
+
+### Opción 1 — Docker CLI
+
+```bash
+docker run -d \
+  --name bedrockgateway \
+  --restart unless-stopped \
+  -e HOST_IP=$(hostname -I | awk '{print $1}') \
+  -v $(pwd)/database:/app/database \
+  -p 53:53/udp \
+  -p 19132:19132/udp \
+  -p 3000:3000/tcp \
+  jesusperales/bedrockgateway:latest
+```
+
+### Opción 2 — Docker Compose
+
+Copia el siguiente bloque en un archivo `docker-compose.yml` y ejecuta `docker compose up -d`:
+
+```yaml
+services:
+  bedrockgateway:
+    image: jesusperales/bedrockgateway:latest
+    container_name: bedrockgateway
+    restart: unless-stopped
+    environment:
+      - HOST_IP=${HOST_IP:-}
+    volumes:
+      - ./database:/app/database
+    ports:
+      - "53:53/udp"
+      - "19132:19132/udp"
+      - "3000:3000/tcp"
+```
+
+> **💡 Tip:** Antes de levantar el servicio, exporta tu IP local para que el DNS la propague correctamente:
+> ```bash
+> export HOST_IP=$(hostname -I | awk '{print $1}')
+> docker compose up -d
+> ```
+
+### ⚠️ Notas Importantes
+
+- **Puerto 53 en Linux:** Si el contenedor no puede enlazarse al puerto 53, es probable que `systemd-resolved` ya lo esté ocupando. Puedes liberarlo con:
+  ```bash
+  sudo systemctl stop systemd-resolved
+  sudo systemctl disable systemd-resolved
+  ```
+- **Permisos del volumen:** La carpeta `./database` que se monta como volumen debe tener permisos de escritura en la máquina host. Si el contenedor falla al iniciar, ejecuta `chmod 777 ./database`.
+- **Swagger UI:** Una vez levantado el contenedor, el panel de documentación interactiva de la API REST estará disponible en **http://localhost:3000/api-docs**.
 
 ---
 
