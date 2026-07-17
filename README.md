@@ -4,7 +4,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/jesusperales/bedrockgateway?logo=docker&color=2496ED)](https://hub.docker.com/r/jesusperales/bedrockgateway)
 [![CI/CD](https://github.com/ripper2hl/bedrockgateway/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ripper2hl/bedrockgateway/actions/workflows/docker-publish.yml)
 
-BedrockGateway es un servidor proxy DNS + Minecraft Bedrock construido 100% en Node.js. 
+BedrockGateway es un servidor proxy DNS + Minecraft Bedrock construido 100% en Node.js.
 Actúa como una alternativa moderna y altamente optimizada a herramientas como BedrockConnect, permitiendo a los jugadores de consolas (Nintendo Switch, Xbox, PlayStation) conectarse a cualquier servidor externo (Custom Servers) saltándose las restricciones de Mojang.
 
 ## ✨ Características Principales
@@ -13,6 +13,9 @@ Actúa como una alternativa moderna y altamente optimizada a herramientas como B
 - **Inyección de UI en Juego:** Crea un "Limbo Server" hiper-optimizado que engaña a la consola para inyectarle un formulario interactivo nativo (sin necesidad de librerías de generación de mundos pesadas).
 - **Almacenamiento Local (SQLite):** Guarda tus servidores favoritos permanentemente.
 - **Filtro Inteligente en Tiempo Real:** El proxy tiene una tarea en segundo plano que hace "Ping" cada 60 segundos a tus servidores. **El menú del juego ocultará automáticamente los servidores inactivos**, mostrando solo los que están listos para jugar.
+- **🆕 Servidores Locales bajo Demanda:** Crea mundos de Bedrock propios directamente desde la UI del juego. El Gateway levanta un contenedor Docker dedicado por cada mundo y te transfiere automáticamente.
+- **🆕 Backups Automáticos:** Los mundos locales se respaldan cada 6 horas en archivos `.tar.gz`. Se conservan los últimos 5 backups por mundo.
+- **🆕 Soporte de Addons:** Coloca packs en la carpeta `addons/` y se aplican automáticamente a todos los mundos locales al arrancar.
 - **API REST Integrada:** Agrega nuevos servidores masivamente usando llamadas HTTP (URLs, Listas Locales o Archivos JSON).
 
 ---
@@ -22,6 +25,7 @@ Actúa como una alternativa moderna y altamente optimizada a herramientas como B
 - **Node.js 18+** (o Docker)
 - La consola (Switch/Xbox/PS) debe estar en la **misma red local** que la máquina que ejecuta BedrockGateway.
 - Permisos de **root/Administrador** para abrir el puerto DNS 53.
+- **Docker instalado en el host** para usar la funcionalidad de Servidores Locales.
 
 ---
 
@@ -47,96 +51,50 @@ El servidor detectará automáticamente tu IP local e iniciará los servicios.
 
 ---
 
-## 🐳 Uso con Docker (Recomendado)
+## 🐳 Despliegue con Docker (Recomendado)
 
-Si prefieres usar contenedores, BedrockGateway está completamente listo para Docker.
+La forma más rápida de poner en marcha BedrockGateway es usando la imagen oficial. No necesitas compilar nada.
 
-### Construir la imagen
-```bash
-docker build -t bedrockgateway .
-```
-
-### Ejecutar el contenedor
-**⚠️ IMPORTANTE:** Para que los jugadores de la red local puedan acceder al servidor de Minecraft, el servidor DNS debe responder con la IP real de tu máquina (no la IP del contenedor). 
-Puedes escribirla manualmente (ej. `-e HOST_IP=192.168.1.100`), o si estás en Linux/macOS, puedes usar un pequeño truco en la terminal para que la detecte y la pase automáticamente:
+### Comando `docker run` completo
 
 ```bash
 docker run -d \
   --name bedrockgateway \
   --restart unless-stopped \
+  --security-opt label=disable \
   -e HOST_IP=$(hostname -I | awk '{print $1}') \
-  -v bedrockgateway-data:/app/database \
+  -e HOST_DATA_PATH=/var/lib/bedrockgateway \
+  -e DB_PATH=/app/data/gateway.db \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /var/lib/bedrockgateway:/app/data:z \
   -p 53:53/udp \
   -p 19132:19132/udp \
   -p 3000:3000/tcp \
-  bedrockgateway
+  ghcr.io/ripper2hl/bedrockgateway:latest
 ```
 
-> **💾 Persistencia de datos:** La opción `-v bedrockgateway-data:/app/database` crea un **volumen de Docker** que almacena la base de datos SQLite fuera del contenedor. Esto significa que puedes borrar y recrear el contenedor sin perder tus servidores registrados. El volumen persiste hasta que lo elimines manualmente con `docker volume rm bedrockgateway-data`.
+#### ¿Por qué cada opción?
 
-### Registrar tu servidor de Minecraft
+| Flag | Para qué sirve |
+|------|----------------|
+| `--security-opt label=disable` | Deshabilita SELinux labeling. **Obligatorio** para acceder al Docker socket en sistemas con SELinux (RHEL, Fedora, openSUSE). |
+| `-e HOST_IP` | IP que el DNS devuelve a las consolas. Auto-detectada si no se pasa. |
+| `-e HOST_DATA_PATH` | **Ruta en el HOST** donde vivirán los mundos, backups y addons. Debe coincidir con el bind `-v`. Default: `/var/lib/bedrockgateway`. |
+| `-e DB_PATH` | Ruta del `gateway.db` dentro del contenedor. Apunta al volumen de datos para que la BD persista. |
+| `-v /var/run/docker.sock` | Permite al Gateway crear contenedores hijos de Bedrock. **Sin `:z`** — el socket de Docker no debe relabelarse. |
+| `-v /var/lib/bedrockgateway:/app/data:z` | Persiste mundos, backups, addons y la BD. `:z` para SELinux. |
+| ⚠️ **NO** `-p 20000-20009/udp` | Los puertos 20000–20009 los abren los **contenedores hijos** directamente en el host. Si el gateway los reserva, Docker reportará `"port already allocated"` al crear mundos. |
 
-Una vez que el contenedor esté corriendo, puedes agregar tu servidor con un simple `curl`:
+> **💡 Ruta de datos personalizada:** Si quieres guardar los datos en otra ubicación, cambia `/var/lib/bedrockgateway` en **ambos** lugares (el `-e` y el `-v`) por la ruta que prefieras, por ejemplo `/opt/mis-mundos`.
+
+### Preparar las carpetas de datos
+
+Crea las carpetas antes del primer arranque para que Docker no las cree como `root`:
 
 ```bash
-curl -X POST http://localhost:3000/api/servers \
-     -H "Content-Type: application/json" \
-     -d '{ "name": "Perales", "target_ip": "192.168.3.84", "target_port": 19133 }'
+sudo mkdir -p /var/lib/bedrockgateway/{worlds,backups,addons}
+sudo chown -R $USER:$USER /var/lib/bedrockgateway
 ```
-
-O si prefieres importar desde el archivo `servidores.json` incluido en el proyecto:
-
-```bash
-curl -X POST http://localhost:3000/api/servers/import \
-     -H "Content-Type: application/json" \
-     -d '{"file": "./servidores.json"}'
-```
-
----
-
-## 🐳 Despliegue con Docker
-
-La forma más rápida de poner en marcha BedrockGateway es usando la imagen oficial publicada en Docker Hub. No necesitas compilar nada.
-
-### Opción 1 — Docker CLI
-
-```bash
-docker run -d \
-  --name bedrockgateway \
-  --restart unless-stopped \
-  -e HOST_IP=$(hostname -I | awk '{print $1}') \
-  -v $(pwd)/database:/app/database \
-  -p 53:53/udp \
-  -p 19132:19132/udp \
-  -p 3000:3000/tcp \
-  jesusperales/bedrockgateway:latest
-```
-
-### Opción 2 — Docker Compose
-
-Copia el siguiente bloque en un archivo `docker-compose.yml` y ejecuta `docker compose up -d`:
-
-```yaml
-services:
-  bedrockgateway:
-    image: jesusperales/bedrockgateway:latest
-    container_name: bedrockgateway
-    restart: unless-stopped
-    environment:
-      - HOST_IP=${HOST_IP:-}
-    volumes:
-      - ./database:/app/database
-    ports:
-      - "53:53/udp"
-      - "19132:19132/udp"
-      - "3000:3000/tcp"
-```
-
-> **💡 Tip:** Antes de levantar el servicio, exporta tu IP local para que el DNS la propague correctamente:
-> ```bash
-> export HOST_IP=$(hostname -I | awk '{print $1}')
-> docker compose up -d
-> ```
 
 ### ⚠️ Notas Importantes
 
@@ -145,8 +103,61 @@ services:
   sudo systemctl stop systemd-resolved
   sudo systemctl disable systemd-resolved
   ```
-- **Permisos del volumen:** La carpeta `./database` que se monta como volumen debe tener permisos de escritura en la máquina host. Si el contenedor falla al iniciar, ejecuta `chmod 777 ./database`.
+- **Permisos del socket de Docker:** El usuario que ejecuta el contenedor necesita acceso a `/var/run/docker.sock`. En la mayoría de distros, agregar el usuario al grupo `docker` es suficiente: `sudo usermod -aG docker $USER`.
 - **Swagger UI:** Una vez levantado el contenedor, el panel de documentación interactiva de la API REST estará disponible en **http://localhost:3000/api-docs**.
+
+---
+
+## 🌍 Servidores Locales (Docker bajo demanda)
+
+Esta funcionalidad permite crear mundos de Minecraft Bedrock propios directamente desde la consola, sin salir del juego.
+
+### Cómo usarlo
+
+1. Abre el menú de BedrockGateway en tu consola.
+2. Ve a **Administrar Servidores → 🌍 Servidores Locales (Docker)**.
+3. Elige **✨ Crear Nuevo Servidor**.
+4. Ingresa el nombre del mundo y selecciona el modo de juego (Supervivencia / Creativo).
+5. Aparecerá un aviso de "⏳ Creando Servidor...". Espera ~30 segundos.
+6. Serás transferido automáticamente al nuevo mundo. ¡Sin desconectarte!
+
+### Gestión de mundos existentes
+
+Desde el menú **Servidores Locales** puedes:
+- **▶ Conectar** — transferirte a un servidor ya activo.
+- **⏹ Detener** — detiene el contenedor Docker (el mundo se conserva en disco).
+- **🗑 Eliminar** — borra el contenedor. **El mundo en disco NO se elimina**, por si quieres recuperarlo en el futuro.
+
+### Límites
+
+- Máximo **10 servidores simultáneos** (puertos UDP 20000–20009, uno por servidor).
+- Si todos los puertos están ocupados, el menú lo indicará y deberás detener alguno primero.
+
+### Addons globales
+
+Cualquier archivo `.mcpack` o `.mcaddon` que coloques en la carpeta `addons/` se aplica automáticamente a **todos** los mundos locales al momento en que su contenedor arranca.
+
+```
+/var/lib/bedrockgateway/
+├── worlds/          # Datos de cada mundo (subcarpeta por servidor)
+├── backups/         # Backups automáticos comprimidos (.tar.gz)
+└── addons/          # Packs aplicados a todos los mundos al arrancar
+```
+
+### Backups automáticos
+
+- Se ejecutan cada **6 horas** automáticamente en segundo plano.
+- Se guardan como `{nombre-mundo}_{timestamp}.tar.gz` en la carpeta `backups/`.
+- Se conservan los **últimos 5 backups** por mundo. Los más antiguos se eliminan automáticamente.
+- El primer backup ocurre **30 segundos después** de arrancar el Gateway.
+
+Para restaurar un mundo desde un backup:
+
+```bash
+# Detén el servidor del mundo primero (desde el juego o con docker stop)
+cd /var/lib/bedrockgateway
+tar -xzf backups/mi-mundo_2026-07-14T21-00-00.tar.gz -C worlds/
+```
 
 ---
 
@@ -155,6 +166,8 @@ services:
 | Variable | Descripción | Default |
 |----------|-------------|---------|
 | `HOST_IP` | IP que el DNS devuelve a las consolas. Si no se define, se auto-detecta. | Auto-detectada |
+| `HOST_DATA_PATH` | Ruta en el **host** donde están los mundos/backups/addons. Usada por el Docker Daemon al crear contenedores hijos. | `/var/lib/bedrockgateway` |
+| `DATA_PATH` | Ruta **dentro del contenedor Gateway** donde están montados los datos. | `/app/data` |
 | `API_PORT` | Puerto de la API REST de administración. | `3000` |
 | `PROXY_PORT` | Puerto del proxy Bedrock (donde escucha las conexiones de las consolas). | `19132` |
 
@@ -222,23 +235,40 @@ Consola (Switch/Xbox/PS)
     ▼
 ┌──────────────────────┐
 │  Proxy Bedrock       │ ── Crea un mundo "Limbo" con UI nativa
-│  (:19132)            │ ── El jugador selecciona un servidor
+│  (:19132)            │ ── El jugador selecciona servidor o crea uno local
 └──────────────────────┘
+    │                  │
+    │                  └──▶ Transfer al servidor real (ej. play.nethergames.org)
+    │
+    ▼ (Servidores Locales)
+┌──────────────────────────────────────┐
+│  Docker Daemon (host)                │
+│  itzg/minecraft-bedrock-server       │
+│  Puerto 20000  → Mundo "Mi Aventura" │
+│  Puerto 20001  → Mundo "Creativo"    │
+│  ...                                 │
+└──────────────────────────────────────┘
     │
     ▼
-  Transfer al servidor real (ej. play.nethergames.org:19132)
+┌──────────────────────┐
+│  Backup Scheduler    │ ── Cada 6h comprime worlds/ → backups/
+└──────────────────────┘
 ```
 
 **Archivos principales:**
-- `index.js`: Punto de entrada y auto-detección de red.
-- `dns/dnsForwarder.js`: Escucha en `0.0.0.0:53` y secuestra los A-Records.
-- `proxy/bedrockProxy.js`: Levanta un falso servidor Offline en el puerto `19132` inyectando `dummyPackets` e invoca la UI nativa.
-- `api/expressServer.js`: Servidor de administración en el puerto `3000`.
-- `database/sqliteConfig.js`: Administrador de la persistencia de datos.
+
+| Archivo | Descripción |
+|---------|-------------|
+| `index.js` | Punto de entrada y auto-detección de red. |
+| `dns/dnsForwarder.js` | Escucha en `0.0.0.0:53` y secuestra los A-Records. |
+| `proxy/bedrockProxy.js` | Levanta el servidor "Limbo", gestiona toda la UI nativa y los formularios. |
+| `proxy/docker/dockerManager.js` | Crea y administra contenedores Bedrock via `dockerode`. |
+| `proxy/docker/backupManager.js` | Scheduler de backups automáticos de mundos. |
+| `api/expressServer.js` | Servidor de administración REST en el puerto `3000`. |
+| `database/sqliteConfig.js` | Administrador de la persistencia de datos (servidores remotos y locales). |
 
 ---
 
 ## 📄 Licencia
 
 Este proyecto está bajo la licencia [MIT](LICENSE).
-

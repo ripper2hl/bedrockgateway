@@ -12,7 +12,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instala herramientas de compilación para dependencias nativas (raknet-native, better-sqlite3)
-RUN apt-get update && apt-get install -y python3 make g++ cmake && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y python3 make g++ cmake tar && rm -rf /var/lib/apt/lists/*
 
 # Instala las dependencias. 
 # Nota: node:24-slim es ideal para better-sqlite3 porque ya incluye soporte glibc.

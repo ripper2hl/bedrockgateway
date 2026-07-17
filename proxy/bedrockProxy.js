@@ -1,9 +1,19 @@
 const bedrock = require('bedrock-protocol');
 const { ServerAdvertisement } = require('bedrock-protocol');
-const { getAllServers, addServer, getServerById, updateServer, deleteServer, updateServerStatus } = require('../database/sqliteConfig');
+const {
+  getAllServers, addServer, getServerById, updateServer, deleteServer, updateServerStatus,
+  getAllLocalServers, addLocalServer, getLocalServerById,
+  updateLocalServerEstado, updateLocalServerContainerId, deleteLocalServer,
+} = require('../database/sqliteConfig');
 const dummyPackets = require('./dummyPackets');
+const {
+  sanitizeName, findAvailablePort, createBedrockServer,
+  waitForContainerReady, stopBedrockServer, removeBedrockServer,
+  MAX_SERVERS,
+} = require('./docker/dockerManager');
+const { startBackupScheduler } = require('./docker/backupManager');
 
-// IDs de formularios
+// IDs de formularios — servidores remotos
 const MAIN_MENU_ID = 1000;
 const ADD_SERVER_ID = 1001;
 const DIRECT_CONNECT_ID = 1002;
@@ -13,36 +23,67 @@ const EDIT_SERVER_ID = 1005;
 const DELETE_SELECT_ID = 1006;
 const DELETE_CONFIRM_ID = 1007;
 
+// IDs de formularios — servidores locales Docker
+const LOCAL_MENU_ID          = 1008; // Lista de mundos locales
+const CREATE_LOCAL_ID        = 1009; // Formulario de creación
+const CREATE_LOCAL_WAIT_ID   = 1010; // Modal "espera..."
+const MANAGE_LOCAL_ID        = 1011; // Gestionar servidor específico
+const DELETE_LOCAL_CONFIRM_ID= 1012; // Confirmar eliminación
+
 // ─── FORMULARIOS DE UI ───────────────────────────────────────────────────────
 
+/**
+ * Devuelve la IP pública/local del host para usarla en los transfer packets.
+ * Primero revisa HOST_IP, luego detecta la interfaz de red activa.
+ */
+function getHostIp() {
+  if (process.env.HOST_IP) return process.env.HOST_IP;
+  const os = require('os');
+  const interfaces = os.networkInterfaces();
+  for (const ifaces of Object.values(interfaces)) {
+    for (const iface of ifaces) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return '127.0.0.1';
+}
+
 function sendMainMenu(client) {
-  const allServers = getAllServers();
-  // Filtrar solo los servidores online para el menú
-  const onlineServers = allServers.filter(s => s.online_status === 1);
+  // Servidores locales activos o iniciando → aparecen PRIMERO
+  const localActive = getAllLocalServers().filter(s => s.estado === 'activo' || s.estado === 'iniciando');
+  // Servidores remotos online → aparecen después
+  const onlineRemote = getAllServers().filter(s => s.online_status === 1);
 
   const buttons = [
-    { text: "Conexión Directa\n(Escribir IP)" },
-    { text: "Administrar Servidores\n\u2699\uFE0F Agregar, Editar, Eliminar" }
+    { text: "Conexi\u00f3n Directa\n(Escribir IP)" },
+    { text: "Administrar Servidores\n\u2699\uFE0F Agregar, Editar, Eliminar" },
   ];
 
-  for (const server of onlineServers) {
-    buttons.push({ text: `${server.name}\n\u25CF ${server.players_online} Jugadores` });
+  // 🏠 Locales primero
+  for (const s of localActive) {
+    const emoji = s.estado === 'activo' ? '\uD83D\uDFE2' : '\u23F3'; // 🟢 ó ⏳
+    buttons.push({ text: `${emoji} ${s.name}\n\uD83C\uDFE0 Servidor Local` });
   }
 
-  // Guardamos la lista filtrada en el cliente para que la respuesta del formulario
-  // use el mismo índice que los botones mostrados.
-  client._onlineServers = onlineServers;
+  // 🌐 Remotos después
+  for (const s of onlineRemote) {
+    buttons.push({ text: `${s.name}\n\u25CF ${s.players_online} Jugadores` });
+  }
 
-  const formPayload = {
-    type: 'form',
-    title: 'BedrockGateway',
-    content: 'Selecciona una opción o un servidor:',
-    buttons,
-  };
+  // Lista unificada para el handler: type='local' | 'remote'
+  client._menuItems = [
+    ...localActive.map(s => ({ type: 'local', ...s })),
+    ...onlineRemote.map(s => ({ type: 'remote', ...s })),
+  ];
 
   client.write('modal_form_request', {
     form_id: MAIN_MENU_ID,
-    data: JSON.stringify(formPayload),
+    data: JSON.stringify({
+      type: 'form',
+      title: 'BedrockGateway',
+      content: 'Selecciona una opci\u00f3n o un servidor:',
+      buttons,
+    }),
   });
 }
 
@@ -55,6 +96,7 @@ function sendManageMenu(client) {
       { text: "\u2795 Agregar Servidor" },
       { text: "\u270F\uFE0F Editar Servidor" },
       { text: "\u2716 Eliminar Servidor" },
+      { text: "\uD83C\uDF0D Servidores Locales (Docker)" },
       { text: "\u2B05\uFE0F Volver al Men\u00FA" }
     ],
   };
@@ -196,6 +238,134 @@ function sendDeleteConfirmForm(client, server) {
   });
 }
 
+// ─── FORMULARIOS: SERVIDORES LOCALES DOCKER ──────────────────────────────────
+
+/**
+ * Muestra el menú de servidores locales con sus estados actuales.
+ */
+function sendLocalMenu(client) {
+  const servers = getAllLocalServers();
+  client._localServers = servers;
+
+  const estadoEmoji = { iniciando: '\u23F3', activo: '\u25CF', detenido: '\u25CB' };
+  const gamemodeLabel = { survival: 'Supervivencia', creative: 'Creativo' };
+
+  const totalUsed = servers.length; // todos los registros, activos y detenidos
+  const buttons = [
+    { text: `\u2728 Crear Nuevo Servidor\n(Slots libres: ${MAX_SERVERS - totalUsed}/${MAX_SERVERS})` },
+  ];
+
+  for (const s of servers) {
+    const emoji = estadoEmoji[s.estado] || '?';
+    const mode = gamemodeLabel[s.gamemode] || s.gamemode;
+    buttons.push({ text: `${emoji} ${s.name}\n${mode} \u2022 Puerto ${s.puerto}` });
+  }
+
+  buttons.push({ text: '\u2B05\uFE0F Volver' });
+
+  client.write('modal_form_request', {
+    form_id: LOCAL_MENU_ID,
+    data: JSON.stringify({
+      type: 'form',
+      title: '\uD83C\uDF0D Servidores Locales',
+      content: 'Tus mundos creados en este servidor:',
+      buttons,
+    }),
+  });
+}
+
+/**
+ * Formulario de creación de nuevo servidor local.
+ */
+function sendCreateLocalServerForm(client) {
+  const totalCount = getAllLocalServers().length; // total de slots usados (activos + detenidos)
+
+  if (totalCount >= MAX_SERVERS) {
+    client.write('modal_form_request', {
+      form_id: LOCAL_MENU_ID,
+      data: JSON.stringify({
+        type: 'modal',
+        title: 'L\u00edmite alcanzado',
+        content: `Ya tienes ${MAX_SERVERS} servidores activos.\nDetén alguno antes de crear uno nuevo.`,
+        button1: 'Entendido',
+        button2: '',
+      }),
+    });
+    return;
+  }
+
+  client.write('modal_form_request', {
+    form_id: CREATE_LOCAL_ID,
+    data: JSON.stringify({
+      type: 'custom_form',
+      title: '\u2728 Crear Servidor Local',
+      content: [
+        { type: 'input',    text: 'Nombre del Mundo', placeholder: 'Mi Aventura', default: '' },
+        { type: 'dropdown', text: 'Modo de Juego', options: ['Supervivencia', 'Creativo'], default: 0 },
+      ],
+    }),
+  });
+}
+
+/**
+ * Modal informativo mientras el contenedor arranca (no bloquea).
+ */
+function sendCreateLocalWaitModal(client, nombre, puerto) {
+  client.write('modal_form_request', {
+    form_id: CREATE_LOCAL_WAIT_ID,
+    data: JSON.stringify({
+      type: 'modal',
+      title: '\u23F3 Creando Servidor...',
+      content: `"${nombre}" se est\u00e1 iniciando.\n\nSer\u00e1s transferido autom\u00e1ticamente cuando est\u00e9 listo (~30 seg).\nPuerto asignado: ${puerto}`,
+      button1: 'OK, esperar\u00e9',
+      button2: '',
+    }),
+  });
+}
+
+/**
+ * Menú de gestión de un servidor local específico (Detener / Eliminar).
+ */
+function sendManageLocalServerForm(client, server) {
+  client._managingLocalServer = server;
+
+  const estadoTexto = { iniciando: '\u23F3 Iniciando', activo: '\u25CF Activo', detenido: '\u25CB Detenido' };
+  const gamemodeLabel = { survival: 'Supervivencia', creative: 'Creativo' };
+
+  client.write('modal_form_request', {
+    form_id: MANAGE_LOCAL_ID,
+    data: JSON.stringify({
+      type: 'form',
+      title: server.name,
+      content: `Estado: ${estadoTexto[server.estado] || server.estado}\nModo: ${gamemodeLabel[server.gamemode] || server.gamemode}\nPuerto: ${server.puerto}`,
+      buttons: [
+        { text: '\u25BA Conectar al Servidor' },
+        { text: '\u23F9 Detener Servidor' },
+        { text: '\uD83D\uDDD1 Eliminar Servidor (mantiene mundo)' },
+        { text: '\u2B05\uFE0F Volver' },
+      ],
+    }),
+  });
+}
+
+/**
+ * Confirmación antes de eliminar un servidor local.
+ */
+function sendDeleteLocalConfirmForm(client, server) {
+  client._deletingLocalServer = server;
+
+  client.write('modal_form_request', {
+    form_id: DELETE_LOCAL_CONFIRM_ID,
+    data: JSON.stringify({
+      type: 'modal',
+      title: 'Confirmar Eliminaci\u00f3n',
+      content: `\u00bfEliminar el servidor "${server.name}"?\n\nEl contenedor Docker ser\u00e1 borrado.\nTu mundo en disco se CONSERVA para futuros usos.`,
+      button1: 'S\u00ed, Eliminar',
+      button2: 'Cancelar',
+    }),
+  });
+}
+
 // ─── TAREA DE PINGS EN SEGUNDO PLANO ─────────────────────────────────────────
 
 function startBackgroundPings() {
@@ -246,6 +416,16 @@ function startProxy(host, port) {
 
   // Iniciar tarea de ping en segundo plano
   startBackgroundPings();
+
+  // Iniciar scheduler de backups de mundos locales
+  startBackupScheduler(getAllLocalServers);
+
+  // Limpiar registros huérfanos de creaciones fallidas previas ('pending')
+  const orphaned = getAllLocalServers().filter(s => s.container_id === 'pending');
+  for (const s of orphaned) {
+    deleteLocalServer(s.id);
+    console.log(`[PROXY] \uD83E\uDDF9 Limpiando registro huérfano: "${s.name}" (puerto ${s.puerto})`);
+  }
 
   server.on('connect', (client) => {
     console.log('🔥 CONEXIÓN RAW');
@@ -412,19 +592,16 @@ function startProxy(host, port) {
             } else if (selectedIndex === 1) {
               sendManageMenu(client);
             } else {
-              // Es un servidor de la lista (usamos la misma lista filtrada que se mostró en el menú)
-              const onlineServers = client._onlineServers || [];
-              const serverIndex = selectedIndex - 2; // Descontamos los 2 primeros botones
+              const items = client._menuItems || [];
+              const item  = items[selectedIndex - 2]; // -2 por los dos botones fijos
 
-              if (serverIndex >= 0 && serverIndex < onlineServers.length) {
-                const selectedServer = onlineServers[serverIndex];
-                console.log(`[PROXY] Transfiriendo a ${selectedServer.name} -> ${selectedServer.target_ip}:${selectedServer.target_port}`);
-
-                client.write('transfer', {
-                  server_address: selectedServer.target_ip,
-                  port: Number(selectedServer.target_port),
-                  reload_world: false
-                });
+              if (item?.type === 'local') {
+                const hostIp = getHostIp();
+                console.log(`[PROXY] Transfer local "${item.name}" -> ${hostIp}:${item.puerto}`);
+                client.write('transfer', { server_address: hostIp, port: item.puerto, reload_world: false });
+              } else if (item?.type === 'remote') {
+                console.log(`[PROXY] Transfer remoto "${item.name}" -> ${item.target_ip}:${item.target_port}`);
+                client.write('transfer', { server_address: item.target_ip, port: Number(item.target_port), reload_world: false });
               }
             }
 
@@ -438,6 +615,8 @@ function startProxy(host, port) {
               sendEditSelectForm(client);      // Editar
             } else if (selectedIndex === 2) {
               sendDeleteSelectForm(client);    // Eliminar
+            } else if (selectedIndex === 3) {
+              sendLocalMenu(client);           // Servidores Locales Docker
             } else {
               sendMainMenu(client);            // Volver
             }
@@ -548,6 +727,173 @@ function startProxy(host, port) {
             }
 
             sendManageMenu(client);
+
+            // ── MENÚ SERVIDORES LOCALES ──
+          } else if (packet.form_id === LOCAL_MENU_ID) {
+            const selectedIndex = Number(parsedData);
+            const localServers = client._localServers || [];
+            const lastIndex = localServers.length + 1; // botón "Volver"
+
+            if (selectedIndex === 0) {
+              sendCreateLocalServerForm(client);
+            } else if (selectedIndex === lastIndex) {
+              sendManageMenu(client);
+            } else {
+              const server = localServers[selectedIndex - 1];
+              if (server) sendManageLocalServerForm(client, server);
+              else sendLocalMenu(client);
+            }
+
+            // ── CREAR SERVIDOR LOCAL ──
+          } else if (packet.form_id === CREATE_LOCAL_ID) {
+            const nombre    = (parsedData[0] || 'Mi Mundo').trim() || 'Mi Mundo';
+            const gamemodeIndex = Number(parsedData[1] ?? 0);
+            const gamemode  = gamemodeIndex === 1 ? 'creative' : 'survival';
+            const folderName = sanitizeName(nombre);
+
+            const availablePort = findAvailablePort(getAllLocalServers);
+
+            if (!availablePort) {
+              sendLocalMenu(client);
+              return;
+            }
+
+            // Insertar en DB con estado 'iniciando'
+            const dbResult = addLocalServer({
+              name: nombre,
+              puerto: availablePort,
+              container_id: 'pending',
+              estado: 'iniciando',
+              world_folder: folderName,
+              gamemode,
+            });
+            const localServerId = dbResult.lastInsertRowid;
+
+            // Informar al jugador que espere
+            sendCreateLocalWaitModal(client, nombre, availablePort);
+
+            // Closure para rastrear el containerId creado (necesario en el catch)
+            let createdContainerId = null;
+
+            // Lanzar el contenedor en background (NO bloquea el hilo principal)
+            createBedrockServer({
+              name: nombre,
+              gamemode,
+              puerto: availablePort,
+              worldFolderName: folderName,
+            })
+              .then(containerId => {
+                createdContainerId = containerId;
+                updateLocalServerContainerId(localServerId, containerId);
+                console.log(`[PROXY] Contenedor ${containerId.slice(0, 12)} iniciado. Esperando señal de listo...`);
+                return waitForContainerReady(containerId).then(() => containerId);
+              })
+              .then(containerId => {
+                updateLocalServerEstado(localServerId, 'activo');
+                console.log(`[PROXY] ✅ Servidor "${nombre}" activo en puerto ${availablePort}. Transfiriendo...`);
+
+                // Transferir al jugador al nuevo servidor
+                const hostIp = getHostIp();
+                try {
+                  client.write('transfer', {
+                    server_address: hostIp,
+                    port: availablePort,
+                    reload_world: false,
+                  });
+                } catch (writeErr) {
+                  console.warn('[PROXY] Cliente ya desconectado; no se envió transfer:', writeErr.message);
+                }
+              })
+              .catch(err => {
+                console.error(`[PROXY] ❌ Error creando servidor "${nombre}":`, err.message);
+                // Limpiar: borrar el registro de la BD Y el contenedor Docker si ya fue creado
+                deleteLocalServer(localServerId);
+                if (createdContainerId) {
+                  removeBedrockServer(createdContainerId)
+                    .catch(e => console.warn('[PROXY] No se pudo eliminar contenedor fallido:', e.message));
+                }
+                try {
+                  client.write('modal_form_request', {
+                    form_id: LOCAL_MENU_ID,
+                    data: JSON.stringify({
+                      type: 'modal',
+                      title: '\u274C Error al crear servidor',
+                      content: `No se pudo crear "${nombre}".\n\nError: ${err.message}\n\nEl slot se ha liberado. Puedes intentarlo de nuevo.`,
+                      button1: 'Entendido',
+                      button2: '',
+                    }),
+                  });
+                } catch (_) { /* cliente ya desconectado */ }
+              });
+
+            // ── MODAL "ESPERA" — solo regresa al menú si el jugador presiona OK ──
+          } else if (packet.form_id === CREATE_LOCAL_WAIT_ID) {
+            // No hacer nada: el transfer llegará solo cuando el contenedor esté listo
+
+            // ── GESTIONAR SERVIDOR LOCAL ──
+          } else if (packet.form_id === MANAGE_LOCAL_ID) {
+            const selectedIndex = Number(parsedData);
+            const server = client._managingLocalServer;
+
+            if (!server) { sendLocalMenu(client); return; }
+
+            if (selectedIndex === 0) {
+              // Conectar
+              const hostIp = getHostIp();
+              client.write('transfer', {
+                server_address: hostIp,
+                port: server.puerto,
+                reload_world: false,
+              });
+            } else if (selectedIndex === 1) {
+              // Detener — manejo graceful si el container_id es inválido o no existe
+              const doStop = () => {
+                updateLocalServerEstado(server.id, 'detenido');
+                console.log(`[PROXY] \u23F9  Servidor "${server.name}" marcado como detenido.`);
+                sendLocalMenu(client);
+              };
+              if (!server.container_id || server.container_id === 'pending') {
+                doStop();
+              } else {
+                stopBedrockServer(server.container_id)
+                  .then(doStop)
+                  .catch(err => {
+                    // 404 = el contenedor ya no existe, actualizamos DB de todas formas
+                    if (err.statusCode === 404) {
+                      doStop();
+                    } else {
+                      console.error('[PROXY] Error deteniendo servidor:', err.message);
+                      sendLocalMenu(client);
+                    }
+                  });
+              }
+            } else if (selectedIndex === 2) {
+              // Eliminar (confirmar)
+              sendDeleteLocalConfirmForm(client, server);
+            } else {
+              // Volver
+              sendLocalMenu(client);
+            }
+
+            // ── CONFIRMAR ELIMINACIÓN DE SERVIDOR LOCAL ──
+          } else if (packet.form_id === DELETE_LOCAL_CONFIRM_ID) {
+            const server = client._deletingLocalServer;
+
+            if (parsedData === true && server) {
+              // Solo llamar a Docker si el container_id es válido
+              if (server.container_id && server.container_id !== 'pending') {
+                removeBedrockServer(server.container_id)
+                  .catch(err => {
+                    if (err.statusCode !== 404) {
+                      console.error('[PROXY] Error eliminando contenedor:', err.message);
+                    }
+                  });
+              }
+              deleteLocalServer(server.id);
+              console.log(`[PROXY] \uD83D\uDDD1\uFE0F  Servidor local "${server.name}" eliminado (mundo conservado).`);
+            }
+
+            sendLocalMenu(client);
           }
 
         } catch (error) {
