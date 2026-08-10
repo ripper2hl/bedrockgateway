@@ -28,13 +28,14 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "bedrock-protocol": "3.57.0",
+    "adm-zip": "^0.6.0",
+    "bedrock-protocol": "3.58.0",
     "better-sqlite3": "^12.9.0",
     "cors": "^2.8.6",
     "dns2": "^2.1.0",
     "dockerode": "^5.0.1",
     "express": "^5.2.1",
-    "minecraft-data": "3.111.0",
+    "minecraft-data": "3.113.0",
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {

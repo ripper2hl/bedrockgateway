@@ -326,7 +326,9 @@ function sendCreateLocalWaitModal(client, nombre, puerto) {
 /**
  * Menú de gestión de un servidor local específico (Detener / Eliminar).
  */
-function sendManageLocalServerForm(client, server) {
+function sendManageLocalServerForm(client, serverSnapshot) {
+  // Refrescar siempre desde la BD para tener container_id y estado actualizados
+  const server = getLocalServerById(serverSnapshot.id) || serverSnapshot;
   client._managingLocalServer = server;
 
   const estadoTexto = { iniciando: '\u23F3 Iniciando', activo: '\u25CF Activo', detenido: '\u25CB Detenido' };
@@ -877,23 +879,34 @@ function startProxy(host, port) {
 
             // ── CONFIRMAR ELIMINACIÓN DE SERVIDOR LOCAL ──
           } else if (packet.form_id === DELETE_LOCAL_CONFIRM_ID) {
-            const server = client._deletingLocalServer;
+            const cachedServer = client._deletingLocalServer;
 
-            if (parsedData === true && server) {
-              // Solo llamar a Docker si el container_id es válido
-              if (server.container_id && server.container_id !== 'pending') {
+            if (parsedData === true && cachedServer) {
+              // Obtener datos frescos de la BD para evitar container_id obsoleto
+              const server = getLocalServerById(cachedServer.id) || cachedServer;
+
+              const doDeleteDb = () => {
+                deleteLocalServer(server.id);
+                console.log(`[PROXY] \uD83D\uDDD1\uFE0F  Servidor local "${server.name}" eliminado de la BD (mundo conservado).`);
+                sendLocalMenu(client);
+              };
+
+              // Si el container_id no es válido, borrar solo de la BD
+              if (!server.container_id || server.container_id === 'pending') {
+                doDeleteDb();
+              } else {
+                // Intentar eliminar el contenedor; la BD se limpia siempre al final
                 removeBedrockServer(server.container_id)
                   .catch(err => {
-                    if (err.statusCode !== 404) {
-                      console.error('[PROXY] Error eliminando contenedor:', err.message);
-                    }
-                  });
+                    // Cualquier error de Docker se registra pero NO bloquea la limpieza de la BD
+                    console.warn(`[PROXY] \u26A0\uFE0F Error al eliminar contenedor (se limpiará de todos modos): ${err.message}`);
+                  })
+                  .finally(doDeleteDb);
+                return; // sendLocalMenu se llama dentro de doDeleteDb (vía finally)
               }
-              deleteLocalServer(server.id);
-              console.log(`[PROXY] \uD83D\uDDD1\uFE0F  Servidor local "${server.name}" eliminado (mundo conservado).`);
+            } else {
+              sendLocalMenu(client);
             }
-
-            sendLocalMenu(client);
           }
 
         } catch (error) {

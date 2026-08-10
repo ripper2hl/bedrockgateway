@@ -3,6 +3,7 @@
 const Docker = require('dockerode');
 const path = require('path');
 const fs = require('fs');
+const AdmZip = require('adm-zip');
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 
@@ -11,9 +12,10 @@ const BEDROCK_IMAGE = 'itzg/minecraft-bedrock-server:latest';
 const PORT_RANGE_START = 20000;
 const PORT_RANGE_END = 20009;
 const MAX_SERVERS = PORT_RANGE_END - PORT_RANGE_START + 1; // 10
-const CONTAINER_START_TIMEOUT_MS = 240_000; // 4 minutos — primera vez descarga el BDS (~60s) + arranque
-const CONTAINER_POLL_INTERVAL_MS = 3_000;  // Revisa logs cada 3s
+const CONTAINER_START_TIMEOUT_MS = 480_000; // 8 minutos — primera vez descarga la imagen + BDS (~200s) + arranque
+const CONTAINER_POLL_INTERVAL_MS = 4_000;  // Revisa logs cada 4s
 const CONTAINER_READY_SIGNAL = 'Server started.';
+const CONTAINER_LOG_PROGRESS_INTERVAL_MS = 30_000; // Progreso cada 30s
 
 /**
  * Ruta de datos en el HOST (no dentro del contenedor).
@@ -103,8 +105,41 @@ function findAvailablePort(getAllLocalServers) {
 // ─── APLICACIÓN DE ADDONS ─────────────────────────────────────────────────────
 
 /**
+ * Extensiones reconocidas como paquetes de addon comprimidos.
+ */
+const ZIP_EXTENSIONS = ['.zip', '.mcpack', '.mcaddon'];
+
+/**
+ * Extrae un archivo ZIP/mcpack/mcaddon a una carpeta temporal dentro del dir de addons.
+ * Devuelve la ruta de la carpeta extraída, o null si falla.
+ *
+ * @param {string} zipPath  - Ruta absoluta al archivo comprimido
+ * @returns {string|null}   - Ruta de la carpeta temporal extraída
+ */
+function extractAddonZip(zipPath) {
+  try {
+    const baseName = path.basename(zipPath, path.extname(zipPath));
+    const extractDir = path.join(path.dirname(zipPath), `.extracted_${baseName}`);
+
+    // Si ya fue extraído anteriormente, limpiar primero para tener versión fresca
+    if (fs.existsSync(extractDir)) {
+      fs.rmSync(extractDir, { recursive: true, force: true });
+    }
+
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(extractDir, /* overwrite */ true);
+    console.log(`[DOCKER] 📦 Addon extraído: ${path.basename(zipPath)} → ${baseName}/`);
+    return extractDir;
+  } catch (err) {
+    console.warn(`[DOCKER] ⚠️ No se pudo extraer "${path.basename(zipPath)}": ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Copia los resource packs globales al nuevo servidor y crea world_resource_packs.json.
  *
+ * Acepta tanto carpetas descomprimidas como archivos .zip/.mcpack/.mcaddon.
  * El BDS carga los packs de /data/resource_packs/ y los activa para un mundo
  * a través de worlds/{LEVEL_NAME}/world_resource_packs.json.
  *
@@ -115,11 +150,37 @@ function applyAddonsToServer(containerServerPath) {
 
   if (!fs.existsSync(addonsDir)) return;
 
-  const addonNames = fs.readdirSync(addonsDir).filter(name => {
-    try { return fs.statSync(path.join(addonsDir, name)).isDirectory(); } catch (_) { return false; }
-  });
+  const allEntries = fs.readdirSync(addonsDir);
 
-  if (addonNames.length === 0) {
+  // Construir lista de fuentes: { srcDir, label }
+  // srcDir puede ser una carpeta existente o la carpeta temporal extraída de un ZIP.
+  const sources = [];
+
+  for (const entry of allEntries) {
+    const entryPath = path.join(addonsDir, entry);
+
+    // Saltar carpetas temporales de extracción previa
+    if (entry.startsWith('.extracted_')) continue;
+
+    try {
+      const stat = fs.statSync(entryPath);
+
+      if (stat.isDirectory()) {
+        // Carpeta descomprimida — usar directamente
+        sources.push({ srcDir: entryPath, label: entry });
+      } else if (stat.isFile()) {
+        const ext = path.extname(entry).toLowerCase();
+        if (ZIP_EXTENSIONS.includes(ext)) {
+          // Archivo comprimido — extraer primero
+          const extracted = extractAddonZip(entryPath);
+          if (extracted) sources.push({ srcDir: extracted, label: entry });
+        }
+        // Otros archivos (.txt, .md, etc.) se ignoran silenciosamente
+      }
+    } catch (_) { /* Error al stat — ignorar entrada */ }
+  }
+
+  if (sources.length === 0) {
     console.log('[DOCKER] ℹ️  No hay addons globales que aplicar.');
     return;
   }
@@ -133,22 +194,29 @@ function applyAddonsToServer(containerServerPath) {
 
   const packRefs = [];
 
-  for (const addonName of addonNames) {
-    const src = path.join(addonsDir, addonName);
-    const dst = path.join(resourcePacksDir, addonName);
+  for (const { srcDir, label } of sources) {
+    // El nombre de destino usa el label sin extensión ZIP
+    const destName = path.basename(label, path.extname(label));
+    const dst = path.join(resourcePacksDir, destName);
 
     try {
-      fs.cpSync(src, dst, { recursive: true });
+      fs.cpSync(srcDir, dst, { recursive: true });
 
       // Leer manifest para obtener UUID y versión
-      const manifestPath = path.join(src, 'manifest.json');
-      if (!fs.existsSync(manifestPath)) continue;
+      const manifestPath = path.join(srcDir, 'manifest.json');
+      if (!fs.existsSync(manifestPath)) {
+        console.warn(`[DOCKER] ⚠️ Addon "${label}" no tiene manifest.json, se copiará sin registrar en world_resource_packs.`);
+        continue;
+      }
 
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
       const uuid = manifest.header?.uuid;
       let version = manifest.header?.version;
 
-      if (!uuid) continue;
+      if (!uuid) {
+        console.warn(`[DOCKER] ⚠️ Addon "${label}" tiene manifest.json pero sin UUID, se omite del registro.`);
+        continue;
+      }
 
       // Normalizar versión a array [major, minor, patch]
       if (typeof version === 'string') {
@@ -156,9 +224,9 @@ function applyAddonsToServer(containerServerPath) {
       }
 
       packRefs.push({ pack_id: uuid, version });
-      console.log(`[DOCKER] 🎨 Addon copiado: ${addonName} (${uuid})`);
+      console.log(`[DOCKER] 🎨 Addon aplicado: ${label} (${uuid})`);
     } catch (err) {
-      console.warn(`[DOCKER] ⚠️ No se pudo copiar addon "${addonName}": ${err.message}`);
+      console.warn(`[DOCKER] ⚠️ No se pudo copiar addon "${label}": ${err.message}`);
     }
   }
 
@@ -257,7 +325,14 @@ async function createBedrockServer({ name, gamemode, puerto, worldFolderName }) 
 
 /**
  * Espera (de forma no bloqueante) a que el servidor Bedrock esté listo.
- * Hace polling de los logs del contenedor buscando la señal "Server started."
+ * Hace polling de los logs del contenedor buscando la señal "Server started.".
+ *
+ * Mejoras:
+ * - Lee TODOS los logs (no solo las últimas N líneas) para no perder la señal
+ *   cuando el instalador de itzg genera cientos de líneas antes del arranque.
+ * - Verifica el estado del contenedor en cada ciclo: si el proceso terminó con
+ *   código de error, falla inmediatamente sin esperar el timeout.
+ * - Imprime progreso cada 30s para facilitar el diagnóstico.
  *
  * @param {string} containerId
  * @returns {Promise<void>}
@@ -266,6 +341,7 @@ function waitForContainerReady(containerId) {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
     const container = docker.getContainer(containerId);
+    let lastProgressLog = 0;
 
     const poll = async () => {
       const elapsed = Date.now() - startTime;
@@ -276,11 +352,37 @@ function waitForContainerReady(containerId) {
         ));
       }
 
+      // Progreso cada 30s para saber que sigue vivo
+      if (elapsed - lastProgressLog >= CONTAINER_LOG_PROGRESS_INTERVAL_MS) {
+        lastProgressLog = elapsed;
+        console.log(`[DOCKER] ⏳ Esperando servidor ${containerId.slice(0, 12)}... (${Math.round(elapsed / 1000)}s)`);
+      }
+
       try {
+        // ── 1. Verificar estado del contenedor — fallo rápido si el proceso murió ──
+        const info = await container.inspect();
+        const state = info.State;
+
+        if (!state.Running && state.Status !== 'created') {
+          // El contenedor terminó — distinguir entre éxito (ExitCode=0) y error
+          const exitCode = state.ExitCode ?? -1;
+          if (exitCode !== 0) {
+            return reject(new Error(
+              `El contenedor ${containerId.slice(0, 12)} terminó inesperadamente (ExitCode=${exitCode}). ` +
+              `Revisa los logs con: docker logs ${containerId.slice(0, 12)}`
+            ));
+          }
+          // ExitCode=0 mientras aún busca señal = arranque limpio pero el BDS ya paró (raro)
+          return reject(new Error(
+            `El contenedor ${containerId.slice(0, 12)} terminó con ExitCode=0 antes de emitir la señal de listo.`
+          ));
+        }
+
+        // ── 2. Leer TODOS los logs para no perderse la señal entre líneas de instalador ──
         const logBuffer = await container.logs({
           stdout: true,
           stderr: true,
-          tail: 80,
+          tail: 'all', // sin límite — la señal puede aparecer lejos del final durante el setup
           follow: false,
         });
 
@@ -291,7 +393,12 @@ function waitForContainerReady(containerId) {
           return resolve();
         }
       } catch (err) {
-        // El contenedor puede no tener logs todavía, ignoramos y reintentamos
+        // 404 = el contenedor desapareció (eliminado externamente)
+        if (err.statusCode === 404) {
+          return reject(new Error(`El contenedor ${containerId.slice(0, 12)} fue eliminado mientras esperaba.`));
+        }
+        // Otros errores transitorios (red, socket) — reintentar en el siguiente ciclo
+        console.warn(`[DOCKER] ⚠️ Error transitorio al verificar estado: ${err.message}`);
       }
 
       setTimeout(poll, CONTAINER_POLL_INTERVAL_MS);
@@ -303,6 +410,7 @@ function waitForContainerReady(containerId) {
 
 /**
  * Detiene un contenedor (el mundo persiste en disco).
+ * Ignora 304 (ya estaba detenido) y 404 (el contenedor ya no existe).
  *
  * @param {string} containerId
  * @returns {Promise<void>}
@@ -313,21 +421,35 @@ async function stopBedrockServer(containerId) {
     await container.stop({ t: 15 }); // 15s de gracia para que el BDS guarde
     console.log(`[DOCKER] ⏹  Contenedor detenido: ${containerId.slice(0, 12)}`);
   } catch (err) {
-    if (err.statusCode !== 304) throw err; // 304 = already stopped, ignorar
+    // 304 = ya estaba detenido, 404 = el contenedor no existe — ambos son casos aceptables
+    if (err.statusCode !== 304 && err.statusCode !== 404) throw err;
+    if (err.statusCode === 404) {
+      console.log(`[DOCKER] ℹ️  Contenedor ${containerId.slice(0, 12)} ya no existe (404), continuando.`);
+    }
   }
 }
 
 /**
  * Detiene y elimina un contenedor. El mundo sigue en disco (no se borra).
+ * Si el contenedor no existe (404) se considera operación exitosa.
  *
  * @param {string} containerId
  * @returns {Promise<void>}
  */
 async function removeBedrockServer(containerId) {
-  await stopBedrockServer(containerId);
+  await stopBedrockServer(containerId); // ya maneja 304 y 404
   const container = docker.getContainer(containerId);
-  await container.remove({ force: false });
-  console.log(`[DOCKER] 🗑️  Contenedor eliminado: ${containerId.slice(0, 12)}`);
+  try {
+    await container.remove({ force: true }); // force:true para asegurar eliminación incluso si aún corre
+    console.log(`[DOCKER] 🗑️  Contenedor eliminado: ${containerId.slice(0, 12)}`);
+  } catch (err) {
+    if (err.statusCode === 404) {
+      // El contenedor ya no existía, se considera eliminado
+      console.log(`[DOCKER] ℹ️  Contenedor ${containerId.slice(0, 12)} ya no existía, nada que eliminar.`);
+    } else {
+      throw err;
+    }
+  }
 }
 
 /**
