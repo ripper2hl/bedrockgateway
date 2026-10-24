@@ -293,10 +293,14 @@ async function createBedrockServer({ name, gamemode, puerto, worldFolderName }) 
       'ALLOW_LIST=false',
       'DIFFICULTY=normal',
       'ALLOW_CHEATS=false',
+      'TRANSPORT=nethernet',
       'UID=1000',
       'GID=1000',
     ],
-    ExposedPorts: { '19132/udp': {} },
+    ExposedPorts: {
+      '19132/udp': {},
+      '19132/tcp': {},
+    },
     HostConfig: {
       SecurityOpt: ['label=disable'], // Desactivar SELinux labeling (igual que el Gateway)
       Binds: [
@@ -305,6 +309,7 @@ async function createBedrockServer({ name, gamemode, puerto, worldFolderName }) 
       ],
       PortBindings: {
         '19132/udp': [{ HostPort: String(puerto) }],
+        '19132/tcp': [{ HostPort: String(puerto) }],
       },
       AutoRemove: false,
       RestartPolicy: { Name: 'no' },

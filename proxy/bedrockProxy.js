@@ -439,6 +439,13 @@ function startProxy(host, port) {
     client.on('server.client_handshake', () => {
       console.log('[PROXY] 🛡️ Saltando encriptación y enviando login_success directo (Estilo BedrockConnect)');
       client.write('play_status', { status: 'login_success' });
+      try {
+        client.write('set_entity_motion', {
+          runtime_entity_id: 1n,
+          velocity: { x: 0, y: 0, z: 0 },
+          tick: 0n,
+        });
+      } catch (_) {}
       client.status = 3; // ClientStatus.Initializing
       client.emit('join');
     });
@@ -510,7 +517,40 @@ function startProxy(host, port) {
       console.error('[PROXY] Error en cliente Bedrock:', error.message || error);
     });
 
+    client.on('packet', (packet) => {
+      if (packet.data?.name && packet.data.name !== 'network_stack_latency') {
+        console.log(`[PROXY] 📦 Paquete del cliente: ${packet.data.name}`);
+      }
+    });
+
+    client.on('close', (reason) => {
+      console.log(`[PROXY] 🔌 Cliente desconectado. Motivo: ${reason || 'desconocido'}`);
+    });
+
     client.on('join', () => {
+      const clientProto = client.version;
+      const clientGameVer = client.skinData?.GameVersion || client.userData?.GameVersion || 'desconocido';
+      console.log(`[PROXY] 🎮 Cliente unido! ProtocolVersion: ${clientProto}, GameVersion: ${clientGameVer}`);
+
+      // Adaptar el serializer si el protocolo del cliente coincide con una versión específica
+      const { Versions } = require('bedrock-protocol/src/options');
+      const { createSerializer, createDeserializer } = require('bedrock-protocol/src/transforms/serializer');
+      const protocolToVersion = {};
+      for (const [ver, proto] of Object.entries(Versions)) {
+        if (!protocolToVersion[proto]) protocolToVersion[proto] = ver;
+      }
+
+      const clientVer = protocolToVersion[clientProto];
+      if (clientVer && clientVer !== server.options.version) {
+        console.log(`[PROXY] 🔄 Adaptando serializer para versión del cliente: ${clientVer} (protocolo ${clientProto})`);
+        try {
+          client.serializer = createSerializer(clientVer);
+          client.deserializer = createDeserializer(clientVer);
+        } catch (e) {
+          console.warn(`[PROXY] ⚠️ No se pudo adaptar serializer a ${clientVer}: ${e.message}`);
+        }
+      }
+
       console.log('[PROXY] Enviando resource_packs_info...');
 
       // Avanzamos el estado de carga
@@ -537,39 +577,134 @@ function startProxy(host, port) {
             resource_packs: [],
             game_version: '*',
             experiments: [],
-            experiments_previously_used: false
+            experiments_previously_used: false,
+            has_editor_packs: false
           });
         } else if (packet.response_status === 'completed') {
-          console.log('[PROXY] Cliente completó carga de packs. Generando mundo dummy...');
+          console.log('[PROXY] Cliente completó carga de packs. Iniciando handshake de mundo BedrockConnect...');
 
-          // 1. Enviamos el StartGamePacket para que deje la pantalla de carga
+          // 1. jigsaw_structure_data (requerido en 1.26.50+)
+          try {
+            client.write('jigsaw_structure_data', dummyPackets.jigsawStructureData);
+          } catch (e) {
+            console.log('[PROXY] (Opcional) jigsaw_structure_data:', e.message);
+          }
+
+          // 2. voxel_shapes (requerido en 1.26.50+)
+          try {
+            client.write('voxel_shapes', dummyPackets.voxelShapes);
+          } catch (e) {
+            console.log('[PROXY] (Opcional) voxel_shapes:', e.message);
+          }
+
+          // 3. start_game
           try {
             client.write('start_game', dummyPackets.startGame);
           } catch (e) {
             console.error('[PROXY] Error enviando start_game:', e.message);
           }
 
-          // 2. Enviamos el CreativeContent y BiomeDefinitionList (necesarios)
+          // 4. item_component
           try {
-            client.write('creative_content', dummyPackets.creativeContent);
-            client.write('biome_definition_list', dummyPackets.biomeDefinitionList);
-            client.write('play_status', { status: 'player_spawn' });
+            client.write('item_component', dummyPackets.itemComponent);
           } catch (e) {
-            console.error('[PROXY] Error enviando paquetes adicionales:', e.message);
+            console.log('[PROXY] (Opcional) item_component:', e.message);
           }
 
-          console.log('[PROXY] Paquetes de inicialización enviados. Esperando respuesta del cliente...');
+          // 5. creative_content
+          try {
+            client.write('creative_content', dummyPackets.creativeContent);
+          } catch (e) {
+            console.error('[PROXY] Error enviando creative_content:', e.message);
+          }
+
+          // 6. 36 chunks vacíos alrededor de (0,0) (x: -3..2, z: -3..2)
+          try {
+            for (let x = -3; x < 3; x++) {
+              for (let z = -3; z < 3; z++) {
+                client.write('level_chunk', {
+                  x: x,
+                  z: z,
+                  dimension: 0,
+                  sub_chunk_count: 0,
+                  highest_subchunk_count: undefined,
+                  cache_enabled: false,
+                  blobs: [],
+                  payload: dummyPackets.emptyChunkPayload,
+                });
+              }
+            }
+          } catch (e) {
+            console.error('[PROXY] Error enviando level_chunk:', e.message);
+          }
+
+          // 7. player_spawn inicial
+          try {
+            client.write('play_status', { status: 'player_spawn' });
+          } catch (e) {
+            console.error('[PROXY] Error enviando play_status:', e.message);
+          }
+
+          // 8. update_attributes para calibrar velocidad de movimiento del cliente
+          try {
+            client.write('update_attributes', {
+              runtime_entity_id: 0,
+              attributes: [
+                {
+                  name: 'minecraft:movement',
+                  min: 0.0,
+                  max: 1024.0,
+                  current: 0.1,
+                  default: 0.1,
+                  modifiers: []
+                }
+              ],
+              tick: 0
+            });
+          } catch (e) {
+            console.log('[PROXY] (Opcional) update_attributes:', e.message);
+          }
+
+          console.log('[PROXY] Paquetes de inicialización enviados. Esperando cliente...');
+
+          // Control seguro de apertura del menú principal
+          let menuSent = false;
+          const sendMenuSafe = (trigger) => {
+            if (menuSent) return;
+            menuSent = true;
+            console.log(`[PROXY] 📋 Enviando menú principal (disparado por: ${trigger})...`);
+            sendMainMenu(client);
+          };
+
+          client.on('set_local_player_as_initialized', () => {
+            sendMenuSafe('set_local_player_as_initialized');
+          });
+
+          // Si el usuario agita la mano o interactúa, re-abre el menú si se perdió
+          client.on('animate', (animPacket) => {
+            if (animPacket.action_id === 'swing_arm' || animPacket.action_id === 1) {
+              sendMenuSafe('animate-swing-arm');
+            }
+          });
+
+          // Fallback: Si en 2500ms tras completed el cliente no emite set_local_player_as_initialized
+          const fallbackTimer = setTimeout(() => {
+            sendMenuSafe('fallback-timer');
+          }, 2500);
+
+          client.on('close', () => clearTimeout(fallbackTimer));
         }
       });
 
       // El cliente pide el radio de chunks que puede ver
       client.on('request_chunk_radius', (packet) => {
-        client.write('chunk_radius_update', { chunk_radius: packet.chunk_radius });
-      });
-
-      client.on('set_local_player_as_initialized', (packet) => {
-        console.log('[PROXY] Cliente Spawned! Enviando menú principal...');
-        sendMainMenu(client);
+        console.log(`[PROXY] 📦 Cliente solicita chunk_radius: ${packet.chunk_radius}`);
+        try {
+          client.write('chunk_radius_update', { chunk_radius: packet.chunk_radius });
+          client.write('play_status', { status: 'player_spawn' });
+        } catch (e) {
+          console.error('[PROXY] Error en request_chunk_radius:', e.message);
+        }
       });
 
       // ─── HANDLER DE RESPUESTAS DE FORMULARIOS ──────────────────────────
