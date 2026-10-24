@@ -14,7 +14,9 @@ function startApi(port) {
   initDb();
 
   const app = express();
-  app.use(cors());
+  app.disable('x-powered-by');
+  const allowedOrigins = process.env.CORS_ORIGIN || '*';
+  app.use(cors({ origin: allowedOrigins }));
   app.use(express.json());
 
   // Swagger UI

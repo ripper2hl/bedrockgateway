@@ -38,7 +38,7 @@ const DELETE_LOCAL_CONFIRM_ID= 1012; // Confirmar eliminación
  */
 function getHostIp() {
   if (process.env.HOST_IP) return process.env.HOST_IP;
-  const os = require('os');
+  const os = require('node:os');
   const interfaces = os.networkInterfaces();
   for (const ifaces of Object.values(interfaces)) {
     for (const iface of ifaces) {
@@ -379,7 +379,8 @@ function startBackgroundPings() {
       try {
         const result = await bedrock.ping({ host: server.target_ip, port: server.target_port, timeout: 3000 });
         updateServerStatus(server.id, 1, result.playersOnline);
-      } catch (error) {
+      } catch {
+        // Ignored: server ping failed or timed out, mark as offline
         updateServerStatus(server.id, 0, 0);
       }
     }
@@ -392,7 +393,8 @@ function startBackgroundPings() {
       try {
         const result = await bedrock.ping({ host: server.target_ip, port: server.target_port, timeout: 3000 });
         updateServerStatus(server.id, 1, result.playersOnline);
-      } catch (error) {
+      } catch {
+        // Ignored: initial ping failed or timed out, mark as offline
         updateServerStatus(server.id, 0, 0);
       }
     }
@@ -488,7 +490,9 @@ function startProxy(host, port) {
             if (payload.identityPublicKey) {
               finalKey = payload.identityPublicKey; // El token principal tiene prioridad
             }
-          } catch (e) { }
+          } catch {
+            // Ignored: invalid authToken JWT payload
+          }
         }
       }
 
@@ -500,7 +504,9 @@ function startProxy(host, port) {
           try {
             const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
             skinData = JSON.parse(payloadStr);
-          } catch (e) { }
+          } catch {
+            // Ignored: invalid skinTokens JWT payload
+          }
         }
       }
 
@@ -778,7 +784,8 @@ function startProxy(host, port) {
                 const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
                 updateServerStatus(result.lastInsertRowid, 1, pingResult.playersOnline);
                 console.log(`[PROXY] Ping exitoso a ${name}: ${pingResult.playersOnline} jugadores`);
-              } catch (e) {
+              } catch {
+                // Ignored: server did not respond to ping; mark as offline
                 updateServerStatus(result.lastInsertRowid, 0, 0);
                 console.log(`[PROXY] ${name} no respondió al ping (se añadió pero aparecerá offline)`);
               }
@@ -834,7 +841,8 @@ function startProxy(host, port) {
             try {
               const pingResult = await bedrock.ping({ host: ip, port: port, timeout: 3000 });
               updateServerStatus(serverId, 1, pingResult.playersOnline);
-            } catch (e) {
+            } catch {
+              // Ignored: server did not respond to ping; mark as offline
               updateServerStatus(serverId, 0, 0);
             }
 

@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { Router } = require('express');
 const { getAllServers, getServerById, addServer, updateServer, deleteServer } = require('../../database/sqliteConfig');
 
@@ -82,6 +84,27 @@ router.delete('/:id', (req, res) => {
   }
 });
 
+/**
+ * Resuelve la fuente de datos para la importación de servidores (URL, archivo o array).
+ */
+async function resolveImportData({ url, file, servers }) {
+  if (url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status} al descargar el archivo`);
+    return response.json();
+  }
+  if (file) {
+    const absolutePath = path.resolve(file);
+    if (!fs.existsSync(absolutePath)) {
+      const err = new Error(`No se encontró el archivo local en la ruta: ${absolutePath}`);
+      err.statusCode = 404;
+      throw err;
+    }
+    return JSON.parse(fs.readFileSync(absolutePath, 'utf8'));
+  }
+  return servers || [];
+}
+
 // POST /api/servers/import
 router.post('/import', async (req, res) => {
   const { url, servers, file } = req.body;
@@ -91,26 +114,7 @@ router.post('/import', async (req, res) => {
   }
 
   try {
-    let data = [];
-
-    if (url) {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status} al descargar el archivo`);
-      data = await response.json();
-    } else if (file) {
-      const fs = require('fs');
-      const path = require('path');
-      const absolutePath = path.resolve(file);
-
-      if (!fs.existsSync(absolutePath)) {
-        return res.status(404).json({ error: `No se encontró el archivo local en la ruta: ${absolutePath}` });
-      }
-
-      const fileContent = fs.readFileSync(absolutePath, 'utf8');
-      data = JSON.parse(fileContent);
-    } else if (servers) {
-      data = servers;
-    }
+    const data = await resolveImportData({ url, file, servers });
 
     if (!Array.isArray(data)) {
       return res.status(400).json({ error: 'La información proveída no es un arreglo válido de servidores' });
@@ -130,6 +134,9 @@ router.post('/import', async (req, res) => {
 
     return res.status(200).json({ message: `Importación exitosa. Se añadieron ${added} servidores nuevos.` });
   } catch (error) {
+    if (error.statusCode === 404) {
+      return res.status(404).json({ error: error.message });
+    }
     console.error('[API] Error importando servidores:', error);
     return res.status(500).json({ error: 'Fallo al procesar la lista. Revisa la consola para más detalles.' });
   }

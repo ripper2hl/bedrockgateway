@@ -148,7 +148,7 @@ module.exports = {
         required: ['name', 'target_ip', 'target_port'],
         properties: {
           name:        { type: 'string',  example: 'Mi Servidor' },
-          target_ip:   { type: 'string',  example: '192.168.1.50' },
+          target_ip:   { type: 'string',  example: 'mc.example.com' },
           target_port: { type: 'integer', example: 19132 },
         },
       },

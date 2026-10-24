@@ -1,4 +1,4 @@
-const os = require('os');
+const os = require('node:os');
 const { startDns } = require('./dns/dnsForwarder');
 const { startApi } = require('./api/expressServer');
 const { startProxy } = require('./proxy/bedrockProxy');

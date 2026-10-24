@@ -9,7 +9,10 @@
     "dev": "DEBUG=minecraft-protocol* nodemon index",
     "test": "jest --forceExit --detectOpenHandles",
     "test:watch": "jest --watch --forceExit --detectOpenHandles",
-    "test:coverage": "jest --coverage --forceExit --detectOpenHandles"
+    "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
+    "sonar": "npm run test:coverage && npm run sonar:scan",
+    "sonar:scan": "docker run --rm --network host -u $(id -u):$(id -g) -v \"$PWD:/usr/src:z\" -e SONAR_HOST_URL=http://127.0.0.1:9000 -e SONAR_TOKEN sonarsource/sonar-scanner-cli",
+    "sonar:issues": "curl -s -u \"$SONAR_TOKEN:\" \"http://127.0.0.1:9000/api/issues/search?componentKeys=bedrockgateway&resolved=false&ps=500\" | jq '.issues[] | {severity, type, message, file: .component, line}'"
   },
   "jest": {
     "testEnvironment": "node",

@@ -1,8 +1,8 @@
 'use strict';
 
-const { execFile } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+const { execFile } = require('node:child_process');
+const path = require('node:path');
+const fs = require('node:fs');
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 
@@ -33,7 +33,7 @@ function ensureDataDirectories() {
  * @returns {string}
  */
 function fileTimestamp() {
-  return new Date().toISOString().replace(/:/g, '-').slice(0, 19);
+  return new Date().toISOString().replaceAll(':', '-').slice(0, 19);
 }
 
 // ─── BACKUPS ─────────────────────────────────────────────────────────────────
@@ -82,10 +82,12 @@ function backupWorld(worldFolderName) {
     const backupFilePath = path.join(BACKUPS_DIR, backupFileName);
 
     // tar -czf <destino> -C <directorio_padre> <carpeta>
-    execFile('tar', ['-czf', backupFilePath, '-C', WORLDS_DIR, worldFolderName], (err) => {
+    const tarBin = fs.existsSync('/usr/bin/tar') ? '/usr/bin/tar' : 'tar';
+    execFile(tarBin, ['-czf', backupFilePath, '-C', WORLDS_DIR, worldFolderName], { env: { PATH: '/usr/bin:/bin' } }, (err) => {
       if (err) {
         console.error(`[BACKUP] ❌ Error en backup de "${worldFolderName}":`, err.message);
-        return reject(err);
+        const rejectionError = err instanceof Error ? err : new Error(err?.message || 'Error desconocido en backup');
+        return reject(rejectionError);
       }
 
       const sizeMB = (fs.statSync(backupFilePath).size / 1024 / 1024).toFixed(2);

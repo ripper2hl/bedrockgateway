@@ -1,8 +1,8 @@
 'use strict';
 
 const Docker = require('dockerode');
-const path = require('path');
-const fs = require('fs');
+const path = require('node:path');
+const fs = require('node:fs');
 const AdmZip = require('adm-zip');
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
@@ -44,14 +44,16 @@ const docker = new Docker({ socketPath: '/var/run/docker.sock' });
  * @returns {string}
  */
 function sanitizeName(name) {
-  return name
+  let cleaned = name
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '') // elimina acentos
-    .replace(/[^a-z0-9]+/g, '-')    // caracteres inválidos → guión
-    .replace(/^-+|-+$/g, '')        // quita guiones al inicio/fin
-    .slice(0, 30)                   // máximo 30 caracteres
-    || 'mundo';                     // fallback si queda vacío
+    .replace(/[^a-z0-9]+/g, '-');    // caracteres inválidos → guión
+
+  while (cleaned.startsWith('-')) cleaned = cleaned.slice(1);
+  while (cleaned.endsWith('-')) cleaned = cleaned.slice(0, -1);
+
+  return cleaned.slice(0, 30) || 'mundo'; // máximo 30 caracteres o fallback si queda vacío
 }
 
 /**
@@ -71,7 +73,7 @@ function parseDockerLogs(buffer) {
     const size = buffer.readUInt32BE(offset + 4);
     offset += 8;
     if (offset + size <= buffer.length) {
-      result += buffer.slice(offset, offset + size).toString('utf-8');
+      result += buffer.subarray(offset, offset + size).toString('utf-8');
     }
     offset += size;
   }
@@ -107,7 +109,7 @@ function findAvailablePort(getAllLocalServers) {
 /**
  * Extensiones reconocidas como paquetes de addon comprimidos.
  */
-const ZIP_EXTENSIONS = ['.zip', '.mcpack', '.mcaddon'];
+const ZIP_EXTENSIONS = new Set(['.zip', '.mcpack', '.mcaddon']);
 
 /**
  * Extrae un archivo ZIP/mcpack/mcaddon a una carpeta temporal dentro del dir de addons.
@@ -170,7 +172,7 @@ function applyAddonsToServer(containerServerPath) {
         sources.push({ srcDir: entryPath, label: entry });
       } else if (stat.isFile()) {
         const ext = path.extname(entry).toLowerCase();
-        if (ZIP_EXTENSIONS.includes(ext)) {
+        if (ZIP_EXTENSIONS.has(ext)) {
           // Archivo comprimido — extraer primero
           const extracted = extractAddonZip(entryPath);
           if (extracted) sources.push({ srcDir: extracted, label: entry });

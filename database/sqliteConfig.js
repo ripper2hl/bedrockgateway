@@ -1,5 +1,5 @@
 const Database = require('better-sqlite3');
-const path = require('path');
+const path = require('node:path');
 
 // DB_PATH permite mover el archivo .db fuera del directorio de código.
 // En Docker se debe pasar -e DB_PATH=/app/data/gateway.db para que el volumen
