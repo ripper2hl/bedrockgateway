@@ -1,7 +1,13 @@
 node_modules
-npm-debug.log
+npm-debug.log*
 .git
 .gitignore
+coverage
+__tests__
 database/gateway.db
 database/gateway.db-wal
 database/gateway.db-shm
+log.txt
+*.log
+servidores.json
+profiles

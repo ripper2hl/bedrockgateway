@@ -10,13 +10,14 @@ Actúa como una alternativa moderna y altamente optimizada a herramientas como B
 ## ✨ Características Principales
 
 - **Intercepción DNS Automática:** Redirige servidores destacados como "The Hive" o "CubeCraft" hacia el proxy local.
-- **Inyección de UI en Juego:** Crea un "Limbo Server" hiper-optimizado que engaña a la consola para inyectarle un formulario interactivo nativo (sin necesidad de librerías de generación de mundos pesadas).
+- **Inyección de UI en Juego:** Crea un "Limbo Server" hiper-optimizado que interactúa con la consola para inyectarle un formulario interactivo nativo sin dependencias pesadas.
+- **🎮 Compatibilidad Bedrock 1.26.50+:** Soporta el protocolo moderno y handshake canónico (`jigsaw_structure_data`, `voxel_shapes`, `item_component`, chunks de limbo), eliminando el error de desconexión "Boat" en Nintendo Switch y consolas.
 - **Almacenamiento Local (SQLite):** Guarda tus servidores favoritos permanentemente.
-- **Filtro Inteligente en Tiempo Real:** El proxy tiene una tarea en segundo plano que hace "Ping" cada 60 segundos a tus servidores. **El menú del juego ocultará automáticamente los servidores inactivos**, mostrando solo los que están listos para jugar.
-- **🆕 Servidores Locales bajo Demanda:** Crea mundos de Bedrock propios directamente desde la UI del juego. El Gateway levanta un contenedor Docker dedicado por cada mundo y te transfiere automáticamente.
-- **🆕 Backups Automáticos:** Los mundos locales se respaldan cada 6 horas en archivos `.tar.gz`. Se conservan los últimos 5 backups por mundo.
+- **Filtro Inteligente en Tiempo Real:** El proxy hace ping en segundo plano cada 60 segundos y oculta automáticamente servidores fuera de línea.
+- **🆕 Servidores Locales bajo Demanda (Docker):** Crea mundos de Bedrock propios directamente desde la UI del juego con soporte oficial para transporte **NetherNet** y mapeo dual TCP/UDP.
+- **🆕 Backups Automáticos:** Los mundos locales se respaldan cada 6 horas en archivos comprimidos `.tar.gz`. Se conservan los últimos 5 backups por mundo.
 - **🆕 Soporte de Addons:** Coloca packs en la carpeta `addons/` y se aplican automáticamente a todos los mundos locales al arrancar.
-- **API REST Integrada:** Agrega nuevos servidores masivamente usando llamadas HTTP (URLs, Listas Locales o Archivos JSON).
+- **API REST Integrada:** Administra o agrega servidores masivamente con Swagger UI en el puerto `3000`.
 
 ---
 
@@ -70,7 +71,7 @@ docker run -d \
   -p 53:53/udp \
   -p 19132:19132/udp \
   -p 3000:3000/tcp \
-  ghcr.io/ripper2hl/bedrockgateway:latest
+  jesusperales/bedrockgateway:latest
 ```
 
 #### ¿Por qué cada opción?
@@ -83,7 +84,7 @@ docker run -d \
 | `-e DB_PATH` | Ruta del `gateway.db` dentro del contenedor. Apunta al volumen de datos para que la BD persista. |
 | `-v /var/run/docker.sock` | Permite al Gateway crear contenedores hijos de Bedrock. **Sin `:z`** — el socket de Docker no debe relabelarse. |
 | `-v /var/lib/bedrockgateway:/app/data:z` | Persiste mundos, backups, addons y la BD. `:z` para SELinux. |
-| ⚠️ **NO** `-p 20000-20009/udp` | Los puertos 20000–20009 los abren los **contenedores hijos** directamente en el host. Si el gateway los reserva, Docker reportará `"port already allocated"` al crear mundos. |
+| ⚠️ **NO** `-p 20000-20009` | Los puertos 20000–20009 (UDP y TCP) los abren los **contenedores hijos** directamente en el host. Si el gateway los reserva, Docker reportará `"port already allocated"` al crear mundos. |
 
 > **💡 Ruta de datos personalizada:** Si quieres guardar los datos en otra ubicación, cambia `/var/lib/bedrockgateway` en **ambos** lugares (el `-e` y el `-v`) por la ruta que prefieras, por ejemplo `/opt/mis-mundos`.
 
